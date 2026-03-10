@@ -130,6 +130,9 @@ def main():
                     logger.error(f"Error PDF presupuesto {oname}: {e}")
                     continue
 
+                # Pausa para que la impresora procese el presupuesto
+                time.sleep(5)
+
                 # 2. Imprimir albaranes asociados
                 picking_ids = order.get("picking_ids", [])
                 if picking_ids:
@@ -147,6 +150,7 @@ def main():
                             if ok:
                                 printed_pickings.add(pid)
                                 logger.info(f"OK albaran {pname} impreso")
+                                time.sleep(3)  # Pausa entre albaranes
                             else:
                                 logger.error(f"Fallo impresion albaran {pname}")
                         except Exception as e:

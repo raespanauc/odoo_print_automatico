@@ -150,7 +150,7 @@ class PrinterManager:
             # 2. Procesar y enviar por socket
             from PIL import Image
 
-            with socket.create_connection((ip, 9100), timeout=30) as sock:
+            with socket.create_connection((ip, 9100), timeout=60) as sock:
                 sock.sendall(ESCPOS_INIT)
 
                 for page_path in pages:
@@ -200,23 +200,19 @@ class PrinterManager:
             time.sleep(0.05)  # Pausa entre bandas para la impresora
 
     def _trim_bottom(self, img):
-        """Recorta el espacio en blanco inferior."""
-        # Escanear desde abajo buscando la última fila con contenido
-        pixels = img.load()
-        last_content_row = 0
-
-        for y in range(img.height - 1, -1, -1):
-            for x in range(0, img.width, 4):  # Muestrear cada 4 pixels
-                if pixels[x, y] < 240:  # No es blanco puro
-                    last_content_row = y
-                    break
-            if last_content_row > 0:
-                break
-
-        if last_content_row > 0:
-            # Agregar margen de 40px después del contenido
-            crop_h = min(last_content_row + 40, img.height)
+        """Recorta el espacio en blanco inferior usando bounding box."""
+        from PIL import ImageOps
+        # Limpiar: todo pixel casi-blanco (>245) se vuelve blanco puro
+        cleaned = img.point(lambda x: 255 if x > 245 else x)
+        # Invertir: ahora el contenido es blanco y el fondo es negro
+        inverted = ImageOps.invert(cleaned)
+        # getbbox() encuentra el rectángulo que contiene todo lo no-negro
+        bbox = inverted.getbbox()
+        if bbox:
+            crop_h = min(bbox[3] + 40, img.height)
+            logger.debug(f"Trim: contenido hasta fila {bbox[3]}, recortando a {crop_h} de {img.height}")
             return img.crop((0, 0, img.width, crop_h))
+        logger.debug("Trim: no se detectó contenido, imagen sin recortar")
         return img
 
     # ─── Utilidades ───────────────────────────────────────────────────────────
