@@ -151,7 +151,7 @@ class PrinterManager:
                 raise RuntimeError("pdftoppm no generó imágenes")
 
             # 3. Convertir cada página a datos ESC/POS y enviar
-            from PIL import Image
+            from PIL import Image, ImageChops
             escpos_data = bytearray(ESCPOS_INIT)
 
             for page_path in pages:
@@ -162,6 +162,8 @@ class PrinterManager:
                     ratio = THERMAL_WIDTH_PX / img.width
                     new_h = int(img.height * ratio)
                     img = img.resize((THERMAL_WIDTH_PX, new_h))
+                # Recortar espacio en blanco inferior
+                img = self._trim_bottom(img)
                 # Convertir a blanco y negro (1 bit)
                 img = img.point(lambda x: 0 if x < 128 else 255, "1")
                 escpos_data.extend(self._image_to_escpos(img))
@@ -178,6 +180,18 @@ class PrinterManager:
             for f in os.listdir(tmpdir):
                 os.remove(os.path.join(tmpdir, f))
             os.rmdir(tmpdir)
+
+    def _trim_bottom(self, img) -> "Image":
+        """Recorta el espacio en blanco inferior de la imagen."""
+        # Crear imagen blanca del mismo tamaño para comparar
+        from PIL import Image, ImageChops
+        bg = Image.new(img.mode, img.size, 255)
+        diff = ImageChops.difference(img, bg)
+        bbox = diff.getbbox()  # (left, upper, right, lower)
+        if bbox:
+            # Mantener ancho completo, recortar solo abajo + margen de 30px
+            return img.crop((0, 0, img.width, min(bbox[3] + 30, img.height)))
+        return img
 
     def _image_to_escpos(self, img) -> bytes:
         """Convierte imagen PIL 1-bit a comandos ESC/POS raster (GS v 0)."""
