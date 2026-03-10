@@ -13,8 +13,7 @@ RUN sed -i 's/Listen localhost:631/Listen 0.0.0.0:631/' /etc/cups/cupsd.conf && 
 
 WORKDIR /app
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir requests python-dotenv loguru
 
 COPY config.py odoo_client.py printer.py monitor.py ./
 
