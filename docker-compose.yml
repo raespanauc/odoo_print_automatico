@@ -1,0 +1,25 @@
+services:
+  odoo-print-monitor:
+    build: .
+    container_name: odoo-print-monitor
+    restart: unless-stopped
+    # Necesita network_mode: host para acceder a impresoras en la red local
+    network_mode: host
+    environment:
+      - ODOO_URL=https://srelsc0903.odoo.com
+      - ODOO_DB=srelsc0903
+      - ODOO_USER=rpa@repuestosespana.cl
+      - ODOO_PASSWORD=SRel9300
+      - POLL_INTERVAL_SECS=8
+      - LOG_LEVEL=INFO
+      - PRINTER_NAMES=POS-80-246
+      - PRINTER_IPS=POS-80-246=10.69.1.246
+      - REPORT_PRESUPUESTO=studio_customization.studio_report_docume_b45c5d74-d0f6-45ee-9dd7-b5020d9fc920
+      - REPORT_ALBARAN=stock.report_deliveryslip
+    volumes:
+      - print-data:/app/data
+      - print-logs:/app/logs
+
+volumes:
+  print-data:
+  print-logs:

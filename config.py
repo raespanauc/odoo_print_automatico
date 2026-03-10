@@ -26,6 +26,14 @@ PRINTER_NAMES = [
     p.strip() for p in os.getenv("PRINTER_NAMES", "").split(",") if p.strip()
 ]
 
+# IPs de impresoras para CUPS en Linux/Docker (formato: nombre=ip,nombre2=ip2)
+PRINTER_IPS = {}
+for entry in os.getenv("PRINTER_IPS", "").split(","):
+    entry = entry.strip()
+    if "=" in entry:
+        name, ip = entry.split("=", 1)
+        PRINTER_IPS[name.strip()] = ip.strip()
+
 # Reporte de presupuesto 80mm para sale.order
 REPORT_PRESUPUESTO = os.getenv(
     "REPORT_PRESUPUESTO",

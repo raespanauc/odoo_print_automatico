@@ -1,10 +1,12 @@
-.env
 venv/
 __pycache__/
 *.pyc
-logs/
-*.tmp
-printed_ids.json
+.env
 .env.desarrollo
+logs/
+printed_ids.json
+printer_files/
+tools/
 test_*.pdf
-data/
+.claude/
+.git/

@@ -33,7 +33,9 @@ logger.add(
 
 # ─── Registro local de IDs impresos ──────────────────────────────────────────
 
-PRINTED_FILE = os.path.join(BASE_DIR, "printed_ids.json")
+# En Docker usa /app/data, en local usa el directorio del proyecto
+DATA_DIR = os.path.join(BASE_DIR, "data") if os.path.isdir(os.path.join(BASE_DIR, "data")) else BASE_DIR
+PRINTED_FILE = os.path.join(DATA_DIR, "printed_ids.json")
 
 
 def load_printed_ids() -> dict:
@@ -85,7 +87,7 @@ def main():
 
     # Inicializar impresoras
     try:
-        printer = PrinterManager(config.PRINTER_NAMES)
+        printer = PrinterManager(config.PRINTER_NAMES, config.PRINTER_IPS)
     except RuntimeError as e:
         logger.error(str(e))
         sys.exit(1)
