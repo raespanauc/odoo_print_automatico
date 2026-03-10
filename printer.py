@@ -134,6 +134,7 @@ class PrinterManager:
             # 1. Convertir PDF a imágenes PNG
             subprocess.run([
                 "pdftoppm", "-png", "-r", "203",
+                "-cropbox",
                 "-scale-to-x", str(THERMAL_WIDTH_PX),
                 "-scale-to-y", "-1",
                 pdf_path,
@@ -155,6 +156,7 @@ class PrinterManager:
 
                 for page_path in pages:
                     img = Image.open(page_path).convert("L")
+                    logger.info(f"Imagen original: {img.width}x{img.height}px")
 
                     # Redimensionar al ancho exacto
                     if img.width != THERMAL_WIDTH_PX:
@@ -163,7 +165,7 @@ class PrinterManager:
 
                     # Recortar espacio en blanco inferior
                     img = self._trim_bottom(img)
-                    logger.debug(f"Imagen recortada: {img.width}x{img.height}px")
+                    logger.info(f"Imagen recortada: {img.width}x{img.height}px")
 
                     # Convertir a 1-bit blanco y negro
                     img = img.point(lambda x: 0 if x < 128 else 255, "1")
@@ -200,19 +202,35 @@ class PrinterManager:
             time.sleep(0.05)  # Pausa entre bandas para la impresora
 
     def _trim_bottom(self, img):
-        """Recorta el espacio en blanco inferior usando bounding box."""
-        from PIL import ImageOps
-        # Limpiar: todo pixel casi-blanco (>245) se vuelve blanco puro
-        cleaned = img.point(lambda x: 255 if x > 245 else x)
-        # Invertir: ahora el contenido es blanco y el fondo es negro
-        inverted = ImageOps.invert(cleaned)
-        # getbbox() encuentra el rectángulo que contiene todo lo no-negro
-        bbox = inverted.getbbox()
-        if bbox:
-            crop_h = min(bbox[3] + 40, img.height)
-            logger.debug(f"Trim: contenido hasta fila {bbox[3]}, recortando a {crop_h} de {img.height}")
-            return img.crop((0, 0, img.width, crop_h))
-        logger.debug("Trim: no se detectó contenido, imagen sin recortar")
+        """Recorta el espacio en blanco inferior escaneando filas."""
+        width = img.width
+        height = img.height
+        data = img.tobytes()
+
+        # Escanear filas de abajo hacia arriba
+        # Una fila tiene "contenido" si >1% de sus pixels son oscuros (<200)
+        threshold = 200
+        min_dark_ratio = 0.01
+        min_dark_pixels = max(1, int(width * min_dark_ratio))
+
+        last_content_row = 0
+        for y in range(height - 1, -1, -1):
+            row_start = y * width
+            row = data[row_start:row_start + width]
+            dark_count = sum(1 for b in row if b < threshold)
+            if dark_count >= min_dark_pixels:
+                last_content_row = y
+                break
+
+        if last_content_row > 0 and last_content_row < height - 50:
+            crop_h = min(last_content_row + 40, height)
+            logger.info(
+                f"Trim: última fila con contenido={last_content_row}, "
+                f"recortando a {crop_h}px de {height}px original"
+            )
+            return img.crop((0, 0, width, crop_h))
+
+        logger.info(f"Trim: contenido hasta fila {last_content_row} de {height}, sin recortar")
         return img
 
     # ─── Utilidades ───────────────────────────────────────────────────────────
