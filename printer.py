@@ -17,12 +17,14 @@ if IS_WINDOWS:
 
 ESC = b'\x1b'
 GS = b'\x1d'
-ESCPOS_INIT = ESC + b'@'          # Inicializar impresora
-ESCPOS_CUT = GS + b'V\x00'       # Corte total de papel
-ESCPOS_FEED = ESC + b'd\x03'     # Avanzar 3 líneas
+ESCPOS_INIT = ESC + b'@'
+ESCPOS_CUT = GS + b'V\x00'
+ESCPOS_FEED = ESC + b'd\x05'
 
 # Ancho en pixels para 80mm a 203dpi
 THERMAL_WIDTH_PX = 576
+# Altura máxima por banda (evita desbordar buffer de impresora)
+BAND_HEIGHT = 256
 
 
 class PrinterManager:
@@ -61,7 +63,6 @@ class PrinterManager:
                 continue
             ip = self.printer_ips.get(name)
             if ip:
-                # Verificar conexión al puerto 9100
                 try:
                     s = socket.create_connection((ip, 9100), timeout=5)
                     s.close()
@@ -128,88 +129,95 @@ class PrinterManager:
         if not ip:
             raise RuntimeError(f"No hay IP para impresora {printer_name}")
 
-        # 1. Convertir PDF a imágenes PNG con pdftoppm
         tmpdir = tempfile.mkdtemp(prefix="odoo_img_")
         try:
+            # 1. Convertir PDF a imágenes PNG
             subprocess.run([
-                "pdftoppm",
-                "-png",
-                "-r", "203",              # 203 DPI (resolución de impresora térmica)
+                "pdftoppm", "-png", "-r", "203",
                 "-scale-to-x", str(THERMAL_WIDTH_PX),
-                "-scale-to-y", "-1",       # mantener proporción
+                "-scale-to-y", "-1",
                 pdf_path,
                 os.path.join(tmpdir, "page"),
             ], capture_output=True, timeout=30, check=True)
 
-            # 2. Obtener páginas generadas (ordenadas)
             pages = sorted([
                 os.path.join(tmpdir, f) for f in os.listdir(tmpdir)
                 if f.endswith(".png")
             ])
-
             if not pages:
                 raise RuntimeError("pdftoppm no generó imágenes")
 
-            # 3. Convertir cada página a datos ESC/POS y enviar
-            from PIL import Image, ImageChops
-            escpos_data = bytearray(ESCPOS_INIT)
+            # 2. Procesar y enviar por socket
+            from PIL import Image
 
-            for page_path in pages:
-                img = Image.open(page_path)
-                img = img.convert("L")  # Escala de grises
-                # Redimensionar al ancho exacto si es necesario
-                if img.width != THERMAL_WIDTH_PX:
-                    ratio = THERMAL_WIDTH_PX / img.width
-                    new_h = int(img.height * ratio)
-                    img = img.resize((THERMAL_WIDTH_PX, new_h))
-                # Recortar espacio en blanco inferior
-                img = self._trim_bottom(img)
-                # Convertir a blanco y negro (1 bit)
-                img = img.point(lambda x: 0 if x < 128 else 255, "1")
-                escpos_data.extend(self._image_to_escpos(img))
+            with socket.create_connection((ip, 9100), timeout=30) as sock:
+                sock.sendall(ESCPOS_INIT)
 
-            escpos_data.extend(ESCPOS_FEED)
-            escpos_data.extend(ESCPOS_CUT)
+                for page_path in pages:
+                    img = Image.open(page_path).convert("L")
 
-            # 4. Enviar por TCP al puerto 9100
-            with socket.create_connection((ip, 9100), timeout=10) as sock:
-                sock.sendall(bytes(escpos_data))
+                    # Redimensionar al ancho exacto
+                    if img.width != THERMAL_WIDTH_PX:
+                        ratio = THERMAL_WIDTH_PX / img.width
+                        img = img.resize((THERMAL_WIDTH_PX, int(img.height * ratio)))
+
+                    # Recortar espacio en blanco inferior
+                    img = self._trim_bottom(img)
+                    logger.debug(f"Imagen recortada: {img.width}x{img.height}px")
+
+                    # Convertir a 1-bit blanco y negro
+                    img = img.point(lambda x: 0 if x < 128 else 255, "1")
+
+                    # Enviar en bandas para no desbordar buffer
+                    self._send_image_bands(sock, img)
+
+                sock.sendall(ESCPOS_FEED + ESCPOS_CUT)
 
         finally:
-            # Limpiar temporales
             for f in os.listdir(tmpdir):
                 os.remove(os.path.join(tmpdir, f))
             os.rmdir(tmpdir)
 
-    def _trim_bottom(self, img) -> "Image":
-        """Recorta el espacio en blanco inferior de la imagen."""
-        # Crear imagen blanca del mismo tamaño para comparar
-        from PIL import Image, ImageChops
-        bg = Image.new(img.mode, img.size, 255)
-        diff = ImageChops.difference(img, bg)
-        bbox = diff.getbbox()  # (left, upper, right, lower)
-        if bbox:
-            # Mantener ancho completo, recortar solo abajo + margen de 30px
-            return img.crop((0, 0, img.width, min(bbox[3] + 30, img.height)))
+    def _send_image_bands(self, sock, img):
+        """Envía la imagen en bandas de BAND_HEIGHT filas."""
+        width_bytes = (img.width + 7) // 8
+        total_height = img.height
+
+        for y in range(0, total_height, BAND_HEIGHT):
+            band_h = min(BAND_HEIGHT, total_height - y)
+            band = img.crop((0, y, img.width, y + band_h))
+            pixels = band.tobytes()
+
+            # Invertir bits: ESC/POS 1=negro, PIL mode "1" 0=negro
+            inverted = bytes(~b & 0xFF for b in pixels)
+
+            # GS v 0 m xL xH yL yH data
+            header = GS + b'v0\x00'
+            header += struct.pack('<H', width_bytes)
+            header += struct.pack('<H', band_h)
+
+            sock.sendall(header + inverted)
+            time.sleep(0.05)  # Pausa entre bandas para la impresora
+
+    def _trim_bottom(self, img):
+        """Recorta el espacio en blanco inferior."""
+        # Escanear desde abajo buscando la última fila con contenido
+        pixels = img.load()
+        last_content_row = 0
+
+        for y in range(img.height - 1, -1, -1):
+            for x in range(0, img.width, 4):  # Muestrear cada 4 pixels
+                if pixels[x, y] < 240:  # No es blanco puro
+                    last_content_row = y
+                    break
+            if last_content_row > 0:
+                break
+
+        if last_content_row > 0:
+            # Agregar margen de 40px después del contenido
+            crop_h = min(last_content_row + 40, img.height)
+            return img.crop((0, 0, img.width, crop_h))
         return img
-
-    def _image_to_escpos(self, img) -> bytes:
-        """Convierte imagen PIL 1-bit a comandos ESC/POS raster (GS v 0)."""
-        width_bytes = (img.width + 7) // 8  # bytes por línea
-        height = img.height
-        pixels = img.tobytes()
-
-        # GS v 0 — Print raster bit image
-        # Format: GS v 0 m xL xH yL yH d1...dk
-        # m=0 (normal), xL xH = width in bytes, yL yH = height in dots
-        header = GS + b'v0' + b'\x00'
-        header += struct.pack('<H', width_bytes)
-        header += struct.pack('<H', height)
-
-        # Invertir bits: en ESC/POS, 1=negro, en PIL mode "1", 0=negro
-        inverted = bytes(~b & 0xFF for b in pixels)
-
-        return header + inverted
 
     # ─── Utilidades ───────────────────────────────────────────────────────────
 
