@@ -4,11 +4,11 @@ from loguru import logger
 
 
 class OdooClient:
-    def __init__(self, url: str, db: str, user: str, apikey: str):
+    def __init__(self, url: str, db: str, user: str, password: str):
         self.url = url.rstrip("/")
         self.db = db
         self.user = user
-        self.apikey = apikey
+        self.password = password
         self.uid = None
         self.session_id = None
         self._common = xmlrpc.client.ServerProxy(f"{self.url}/xmlrpc/2/common")
@@ -17,7 +17,7 @@ class OdooClient:
 
     def authenticate(self) -> int:
         """Autentica vía XML-RPC y retorna uid."""
-        self.uid = self._common.authenticate(self.db, self.user, self.apikey, {})
+        self.uid = self._common.authenticate(self.db, self.user, self.password, {})
         if not self.uid:
             raise ConnectionError(f"No se pudo autenticar como {self.user}")
         logger.info(f"Conectado a {self.url} (uid={self.uid})")
@@ -32,7 +32,7 @@ class OdooClient:
                 "params": {
                     "db": self.db,
                     "login": self.user,
-                    "password": self.apikey,
+                    "password": self.password,
                 },
             },
             timeout=30,
@@ -54,47 +54,44 @@ class OdooClient:
         self.authenticate()
         self.get_session_cookie()
 
-    def get_ready_pickings(self, last_check: str) -> list:
-        """Busca albaranes listos para imprimir desde last_check."""
+    def get_confirmed_orders(self, last_check: str) -> list:
+        """Busca sale.orders confirmados desde last_check."""
         domain = [
-            ["state", "=", "assigned"],
-            ["picking_type_code", "=", "outgoing"],
+            ["state", "=", "sale"],
             ["write_date", ">=", last_check],
-            ["x_studio_printed", "!=", True],
         ]
-        fields = ["id", "name", "write_date", "partner_id"]
-        pickings = self._models.execute_kw(
-            self.db,
-            self.uid,
-            self.apikey,
-            "stock.picking",
-            "search_read",
+        fields = ["id", "name", "write_date", "partner_id", "picking_ids"]
+        orders = self._models.execute_kw(
+            self.db, self.uid, self.password,
+            "sale.order", "search_read",
             [domain],
             {"fields": fields, "order": "write_date asc"},
         )
-        return pickings
+        return orders
 
-    def download_pdf(self, picking_id: int, report_action: str) -> bytes:
-        """Descarga el PDF del albarán vía la sesión web."""
-        url = f"{self.url}/report/pdf/{report_action}/{picking_id}"
-        resp = self._web_session.get(url, timeout=60)
-        if resp.status_code == 401:
+    def get_pickings_by_ids(self, picking_ids: list) -> list:
+        """Obtiene datos de pickings por sus IDs."""
+        if not picking_ids:
+            return []
+        fields = ["id", "name", "state", "picking_type_code"]
+        return self._models.execute_kw(
+            self.db, self.uid, self.password,
+            "stock.picking", "search_read",
+            [[["id", "in", picking_ids]]],
+            {"fields": fields},
+        )
+
+    def download_pdf(self, record_id: int, report_name: str) -> bytes:
+        """Descarga el PDF de un registro vía la sesión web con CSRF token."""
+        url = f"{self.url}/report/pdf/{report_name}/{record_id}"
+        params = {"csrf_token": self.session_id}
+        resp = self._web_session.get(url, params=params, timeout=60)
+        if resp.status_code in (401, 403):
             logger.warning("Sesión expirada, reconectando...")
             self.refresh_session()
-            resp = self._web_session.get(url, timeout=60)
+            params = {"csrf_token": self.session_id}
+            resp = self._web_session.get(url, params=params, timeout=60)
         resp.raise_for_status()
         if "application/pdf" not in resp.headers.get("Content-Type", ""):
             raise ValueError(f"Respuesta no es PDF: {resp.headers.get('Content-Type')}")
         return resp.content
-
-    def mark_as_printed(self, picking_id: int) -> bool:
-        """Marca el albarán como impreso en Odoo."""
-        result = self._models.execute_kw(
-            self.db,
-            self.uid,
-            self.apikey,
-            "stock.picking",
-            "write",
-            [[picking_id], {"x_studio_printed": True}],
-        )
-        return bool(result)

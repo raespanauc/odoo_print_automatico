@@ -1,8 +1,10 @@
 """
 OdooPrintMonitor — Entrypoint principal.
-Monitorea albaranes en Odoo y los imprime automáticamente.
+Monitorea presupuestos confirmados en Odoo y los imprime automáticamente
+en todas las impresoras configuradas.
 """
 
+import json
 import os
 import sys
 import time
@@ -12,14 +14,15 @@ from loguru import logger
 
 import config
 from odoo_client import OdooClient
-from printer import ThermalPrinter
+from printer import PrinterManager
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
-LOG_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "logs")
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+LOG_DIR = os.path.join(BASE_DIR, "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
 
-logger.remove()  # quitar handler por defecto (stderr)
+logger.remove()
 logger.add(sys.stderr, level=config.LOG_LEVEL)
 logger.add(
     os.path.join(LOG_DIR, "monitor_{time:YYYY-MM-DD}.log"),
@@ -28,6 +31,27 @@ logger.add(
     level=config.LOG_LEVEL,
 )
 
+# ─── Registro local de IDs impresos ──────────────────────────────────────────
+
+PRINTED_FILE = os.path.join(BASE_DIR, "printed_ids.json")
+
+
+def load_printed_ids() -> dict:
+    """Carga registro de IDs impresos: {orders: [...], pickings: [...]}"""
+    if os.path.exists(PRINTED_FILE):
+        with open(PRINTED_FILE, "r") as f:
+            data = json.load(f)
+            # Migrar formato antiguo (lista plana)
+            if isinstance(data, list):
+                return {"orders": [], "pickings": data}
+            return data
+    return {"orders": [], "pickings": []}
+
+
+def save_printed_ids(data: dict):
+    with open(PRINTED_FILE, "w") as f:
+        json.dump(data, f, indent=2)
+
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
 
@@ -35,9 +59,13 @@ logger.add(
 def main():
     logger.info("Iniciando OdooPrintMonitor...")
 
-    # Validar configuración mínima
-    if not config.ODOO_USER or not config.ODOO_APIKEY:
-        logger.error("ODOO_USER y ODOO_APIKEY son obligatorios. Revisa el archivo .env")
+    # Validar configuración
+    if not config.ODOO_USER or not config.ODOO_PASSWORD:
+        logger.error("ODOO_USER y ODOO_PASSWORD son obligatorios. Revisa el archivo .env")
+        sys.exit(1)
+
+    if not config.PRINTER_NAMES:
+        logger.error("PRINTER_NAMES es obligatorio. Revisa el archivo .env")
         sys.exit(1)
 
     # Inicializar cliente Odoo
@@ -45,7 +73,7 @@ def main():
         url=config.ODOO_URL,
         db=config.ODOO_DB,
         user=config.ODOO_USER,
-        apikey=config.ODOO_APIKEY,
+        password=config.ODOO_PASSWORD,
     )
 
     try:
@@ -55,53 +83,86 @@ def main():
         logger.error(f"Error en conexión inicial: {e}")
         sys.exit(1)
 
-    # Inicializar impresora
+    # Inicializar impresoras
     try:
-        printer = ThermalPrinter(config.PRINTER_NAME)
+        printer = PrinterManager(config.PRINTER_NAMES)
     except RuntimeError as e:
         logger.error(str(e))
         sys.exit(1)
 
-    # Timestamp de inicio como referencia
+    # Cargar registro de impresos
+    printed = load_printed_ids()
+    printed_orders = set(printed["orders"])
+    printed_pickings = set(printed["pickings"])
+    logger.info(
+        f"Registro local: {len(printed_orders)} ordenes, "
+        f"{len(printed_pickings)} albaranes previamente impresos"
+    )
+
+    # Timestamp de inicio
     last_check = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
     logger.info(f"Monitoreando desde {last_check} cada {config.POLL_INTERVAL_SECS}s")
 
     # ─── Loop principal ───────────────────────────────────────────────────────
     while True:
         try:
-            pickings = client.get_ready_pickings(last_check)
+            orders = client.get_confirmed_orders(last_check)
 
-            for picking in pickings:
-                pid = picking["id"]
-                name = picking["name"]
-                logger.info(f"Nuevo albaran: {name} (id={pid}) — imprimiendo...")
+            for order in orders:
+                oid = order["id"]
+                oname = order["name"]
 
-                # Descargar PDF
-                try:
-                    pdf = client.download_pdf(pid, config.REPORT_ACTION)
-                except Exception as e:
-                    logger.error(f"No se pudo descargar PDF de {name}: {e}")
+                if oid in printed_orders:
                     continue
 
-                # Imprimir
-                printed = printer.print_pdf(pdf)
-                if not printed:
-                    logger.error(f"Fallo al imprimir {name} — NO se marca como impreso")
+                logger.info(f"Nuevo pedido confirmado: {oname} (id={oid})")
+
+                # 1. Imprimir PRESUPUESTO 80MM
+                try:
+                    pdf = client.download_pdf(oid, config.REPORT_PRESUPUESTO)
+                    ok = printer.print_pdf(pdf, doc_name=f"Presupuesto {oname}")
+                    if not ok:
+                        logger.error(f"Fallo impresion presupuesto {oname}")
+                        continue
+                except Exception as e:
+                    logger.error(f"Error PDF presupuesto {oname}: {e}")
                     continue
 
-                # Marcar como impreso
-                try:
-                    client.mark_as_printed(pid)
-                    logger.info(f"OK {name} impreso correctamente")
-                except Exception as e:
-                    logger.error(f"Impreso pero no se pudo marcar {name}: {e}")
+                # 2. Imprimir albaranes asociados
+                picking_ids = order.get("picking_ids", [])
+                if picking_ids:
+                    pickings = client.get_pickings_by_ids(picking_ids)
+                    for pick in pickings:
+                        pid = pick["id"]
+                        pname = pick["name"]
+
+                        if pid in printed_pickings:
+                            continue
+
+                        try:
+                            pdf = client.download_pdf(pid, config.REPORT_ALBARAN)
+                            ok = printer.print_pdf(pdf, doc_name=f"Albaran {pname}")
+                            if ok:
+                                printed_pickings.add(pid)
+                                logger.info(f"OK albaran {pname} impreso")
+                            else:
+                                logger.error(f"Fallo impresion albaran {pname}")
+                        except Exception as e:
+                            logger.error(f"Error PDF albaran {pname}: {e}")
+
+                # Marcar orden como impresa
+                printed_orders.add(oid)
+                save_printed_ids({
+                    "orders": sorted(printed_orders),
+                    "pickings": sorted(printed_pickings),
+                })
+                logger.info(f"OK {oname} procesado completamente")
 
             # Actualizar timestamp
             last_check = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
 
         except Exception as e:
             logger.warning(f"Error en ciclo de polling: {e}")
-            # Intentar reconexión
             try:
                 client.refresh_session()
             except Exception as re:

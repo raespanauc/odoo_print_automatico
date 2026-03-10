@@ -4,3 +4,5 @@ __pycache__/
 *.pyc
 logs/
 *.tmp
+printed_ids.json
+.env.desarrollo

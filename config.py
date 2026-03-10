@@ -1,13 +1,36 @@
 import os
+import sys
 from dotenv import load_dotenv
 
-load_dotenv()
+# Permite elegir archivo .env: python monitor.py --env .env.desarrollo
+env_file = ".env"
+if "--env" in sys.argv:
+    idx = sys.argv.index("--env")
+    if idx + 1 < len(sys.argv):
+        env_file = sys.argv[idx + 1]
 
+load_dotenv(env_file)
+
+# Odoo
 ODOO_URL = os.getenv("ODOO_URL", "https://repuestosespana.odoo.com")
 ODOO_DB = os.getenv("ODOO_DB", "repuestosespana")
 ODOO_USER = os.getenv("ODOO_USER")
-ODOO_APIKEY = os.getenv("ODOO_APIKEY")
-PRINTER_NAME = os.getenv("PRINTER_NAME", "EPSON TM-T20II TOTEM")
+ODOO_PASSWORD = os.getenv("ODOO_PASSWORD")
+
+# Polling
 POLL_INTERVAL_SECS = int(os.getenv("POLL_INTERVAL_SECS", "8"))
-REPORT_ACTION = os.getenv("REPORT_ACTION", "stock.report_deliveryslip80")
 LOG_LEVEL = os.getenv("LOG_LEVEL", "INFO")
+
+# Impresoras (separadas por coma)
+PRINTER_NAMES = [
+    p.strip() for p in os.getenv("PRINTER_NAMES", "").split(",") if p.strip()
+]
+
+# Reporte de presupuesto 80mm para sale.order
+REPORT_PRESUPUESTO = os.getenv(
+    "REPORT_PRESUPUESTO",
+    "studio_customization.studio_report_docume_b45c5d74-d0f6-45ee-9dd7-b5020d9fc920",
+)
+
+# Reporte de albarán para stock.picking
+REPORT_ALBARAN = os.getenv("REPORT_ALBARAN", "stock.report_deliveryslip")
