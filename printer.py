@@ -202,35 +202,60 @@ class PrinterManager:
             time.sleep(0.05)  # Pausa entre bandas para la impresora
 
     def _trim_bottom(self, img):
-        """Recorta el espacio en blanco inferior escaneando filas."""
+        """Recorta espacio en blanco inferior. Detecta gap entre contenido y footer."""
         width = img.width
         height = img.height
         data = img.tobytes()
 
-        # Escanear filas de abajo hacia arriba
-        # Una fila tiene "contenido" si >1% de sus pixels son oscuros (<200)
         threshold = 200
-        min_dark_ratio = 0.01
-        min_dark_pixels = max(1, int(width * min_dark_ratio))
+        min_dark_pixels = max(1, int(width * 0.01))
 
-        last_content_row = 0
-        for y in range(height - 1, -1, -1):
+        # Clasificar cada fila como contenido (True) o blanca (False)
+        has_content = []
+        for y in range(height):
             row_start = y * width
             row = data[row_start:row_start + width]
             dark_count = sum(1 for b in row if b < threshold)
-            if dark_count >= min_dark_pixels:
-                last_content_row = y
-                break
+            has_content.append(dark_count >= min_dark_pixels)
 
-        if last_content_row > 0 and last_content_row < height - 50:
-            crop_h = min(last_content_row + 40, height)
+        # Buscar desde arriba el último bloque de contenido antes de un gap grande
+        # Un gap de >100 filas blancas indica separación contenido/footer
+        GAP_THRESHOLD = 100
+        gap_start = None
+        consecutive_white = 0
+        main_content_end = height
+
+        for y in range(height):
+            if not has_content[y]:
+                if consecutive_white == 0:
+                    gap_start = y
+                consecutive_white += 1
+            else:
+                if consecutive_white >= GAP_THRESHOLD:
+                    # Hay un gap grande antes de este contenido → esto es footer
+                    main_content_end = gap_start
+                    logger.info(
+                        f"Trim: gap de {consecutive_white} filas blancas "
+                        f"en fila {gap_start}, footer detectado"
+                    )
+                    break
+                consecutive_white = 0
+
+        # Si no se encontró gap, buscar la última fila con contenido
+        if main_content_end == height:
+            for y in range(height - 1, -1, -1):
+                if has_content[y]:
+                    main_content_end = y + 1
+                    break
+
+        crop_h = min(main_content_end + 40, height)
+        if crop_h < height - 50:
             logger.info(
-                f"Trim: última fila con contenido={last_content_row}, "
-                f"recortando a {crop_h}px de {height}px original"
+                f"Trim: recortando a {crop_h}px de {height}px original"
             )
             return img.crop((0, 0, width, crop_h))
 
-        logger.info(f"Trim: contenido hasta fila {last_content_row} de {height}, sin recortar")
+        logger.info(f"Trim: contenido ocupa {main_content_end} de {height}px, sin recortar")
         return img
 
     # ─── Utilidades ───────────────────────────────────────────────────────────
