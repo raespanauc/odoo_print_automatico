@@ -173,7 +173,8 @@ class PrinterManager:
                     # Enviar en bandas para no desbordar buffer
                     self._send_image_bands(sock, img)
 
-                sock.sendall(ESCPOS_FEED + ESCPOS_CUT)
+                    # Cortar papel después de cada página
+                    sock.sendall(ESCPOS_FEED + ESCPOS_CUT)
 
         finally:
             for f in os.listdir(tmpdir):
