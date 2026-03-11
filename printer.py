@@ -150,8 +150,9 @@ class PrinterManager:
                     img = self._trim_bottom(img)
                     logger.info(f"Imagen recortada: {img.width}x{img.height}px")
 
-                    # Convertir a 1-bit blanco y negro (threshold limpio)
-                    img = img.point(lambda x: 0 if x < 128 else 255, "1")
+                    # Convertir a 1-bit. Threshold bajo (96) compensa el
+                    # sangrado térmico que engrosa las barras de barcodes.
+                    img = img.point(lambda x: 0 if x < 96 else 255, "1")
 
                     # Enviar en bandas para no desbordar buffer
                     self._send_image_bands(sock, img)
