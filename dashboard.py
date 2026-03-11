@@ -105,6 +105,29 @@ def api_printers_delete(pid):
     return jsonify({"ok": True})
 
 
+# ─── Settings Odoo ────────────────────────────────────────────────────────
+
+
+@app.route("/api/settings", methods=["GET"])
+def api_settings_get():
+    return jsonify(store.get_odoo_settings())
+
+
+@app.route("/api/settings", methods=["PUT"])
+def api_settings_save():
+    data = request.json
+    store.save_odoo_settings(data)
+    # Actualizar estado visible en dashboard
+    s = store.get_odoo_settings()
+    update_state(
+        odoo_url=s["odoo_url"],
+        odoo_db=s["odoo_db"],
+        settings_changed=True,
+    )
+    logger.info(f"Settings actualizados: {s['odoo_url']} / {s['odoo_db']}")
+    return jsonify({"ok": True})
+
+
 def start_dashboard(port=None):
     """Inicia Flask en un hilo de fondo."""
     port = port or config.DASHBOARD_PORT

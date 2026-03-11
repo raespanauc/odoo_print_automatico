@@ -88,17 +88,24 @@ def main():
             "Agregá impresoras desde el dashboard web."
         )
 
-    # Inicializar cliente Odoo
-    client = OdooClient(
-        url=config.ODOO_URL,
-        db=config.ODOO_DB,
-        user=config.ODOO_USER,
-        password=config.ODOO_PASSWORD,
-    )
+    # Inicializar cliente Odoo desde settings (SQLite > env vars)
+    def connect_odoo(s=None):
+        """Crea y autentica un OdooClient con los settings actuales."""
+        if s is None:
+            s = store.get_odoo_settings()
+        c = OdooClient(
+            url=s["odoo_url"],
+            db=s["odoo_db"],
+            user=s["odoo_user"],
+            password=s["odoo_password"],
+        )
+        c.authenticate()
+        c.get_session_cookie()
+        update_state(odoo_url=s["odoo_url"], odoo_db=s["odoo_db"])
+        return c, s
 
     try:
-        client.authenticate()
-        client.get_session_cookie()
+        client, current_settings = connect_odoo()
     except Exception as e:
         logger.error(f"Error en conexión inicial: {e}")
         sys.exit(1)
@@ -125,6 +132,22 @@ def main():
     # ─── Loop principal ───────────────────────────────────────────────────────
     while True:
         try:
+            # Detectar cambio de settings → reconectar Odoo
+            new_settings = store.get_odoo_settings()
+            if (new_settings["odoo_url"] != current_settings["odoo_url"]
+                    or new_settings["odoo_db"] != current_settings["odoo_db"]
+                    or new_settings["odoo_user"] != current_settings["odoo_user"]
+                    or new_settings["odoo_password"] != current_settings["odoo_password"]):
+                logger.info(
+                    f"Settings cambiados, reconectando a "
+                    f"{new_settings['odoo_url']} / {new_settings['odoo_db']}"
+                )
+                try:
+                    client, current_settings = connect_odoo(new_settings)
+                    logger.info("Reconexion exitosa con nuevos settings")
+                except Exception as e:
+                    logger.error(f"Error reconectando con nuevos settings: {e}")
+
             orders = client.get_confirmed_orders(last_check)
             update_state(last_poll=datetime.now(timezone.utc).isoformat())
 
@@ -140,7 +163,9 @@ def main():
 
                 # Descargar PDF del presupuesto
                 try:
-                    presupuesto_pdf = client.download_pdf(oid, config.REPORT_PRESUPUESTO)
+                    presupuesto_pdf = client.download_pdf(
+                        oid, current_settings["report_presupuesto"],
+                    )
                 except Exception as e:
                     logger.error(f"Error PDF presupuesto {oname}: {e}")
                     store.record_print(
@@ -217,7 +242,7 @@ def main():
 
                         try:
                             albaran_pdf = client.download_pdf(
-                                pid, config.REPORT_ALBARAN,
+                                pid, current_settings["report_albaran"],
                             )
                             results = printer.print_pdf(
                                 albaran_pdf,

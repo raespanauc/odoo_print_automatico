@@ -82,7 +82,7 @@
     <header>
         <h1>OdooPrint Monitor</h1>
         <div class="status">
-            <span id="odoo-info" style="font-size:12px;opacity:0.7;margin-right:12px;"></span>
+            <span id="odoo-info" style="font-size:12px;opacity:0.7;margin-right:12px;cursor:pointer;text-decoration:underline dotted;" onclick="openSettingsModal()" title="Click para configurar"></span>
             <span id="clock"></span>
             <span class="dot" id="monitor-dot"></span>
             <span id="monitor-label">Cargando...</span>
@@ -160,6 +160,30 @@
         </div>
     </div>
 
+    <!-- Modal settings Odoo -->
+    <div class="modal-overlay" id="settings-modal">
+        <div class="modal">
+            <h3>Configuracion Odoo</h3>
+            <label>URL Odoo</label>
+            <input type="text" id="set-url" placeholder="https://repuestosespana.odoo.com">
+            <label>Base de datos</label>
+            <input type="text" id="set-db" placeholder="repuestosespana">
+            <label>Usuario</label>
+            <input type="text" id="set-user" placeholder="rpa@empresa.cl">
+            <label>Password</label>
+            <input type="password" id="set-password" placeholder="********">
+            <label>Reporte Presupuesto (nombre tecnico)</label>
+            <input type="text" id="set-report-ppto" placeholder="studio_customization.xxx">
+            <label>Reporte Albaran (nombre tecnico)</label>
+            <input type="text" id="set-report-alb" placeholder="stock.report_deliveryslip">
+            <div style="font-size:12px;color:#888;margin-top:8px;">Los cambios se aplican en el siguiente ciclo de polling (sin reiniciar).</div>
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeSettingsModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="saveSettings()">Guardar</button>
+            </div>
+        </div>
+    </div>
+
     <script>
         // Clock
         function updateClock() {
@@ -169,7 +193,44 @@
         setInterval(updateClock, 1000);
         updateClock();
 
-        // Modal
+        // Settings modal
+        async function openSettingsModal() {
+            try {
+                const res = await fetch('/api/settings');
+                const s = await res.json();
+                document.getElementById('set-url').value = s.odoo_url || '';
+                document.getElementById('set-db').value = s.odoo_db || '';
+                document.getElementById('set-user').value = s.odoo_user || '';
+                document.getElementById('set-password').value = s.odoo_password || '';
+                document.getElementById('set-report-ppto').value = s.report_presupuesto || '';
+                document.getElementById('set-report-alb').value = s.report_albaran || '';
+            } catch (e) { console.error(e); }
+            document.getElementById('settings-modal').classList.add('active');
+        }
+
+        function closeSettingsModal() {
+            document.getElementById('settings-modal').classList.remove('active');
+        }
+
+        async function saveSettings() {
+            const data = {
+                odoo_url: document.getElementById('set-url').value,
+                odoo_db: document.getElementById('set-db').value,
+                odoo_user: document.getElementById('set-user').value,
+                odoo_password: document.getElementById('set-password').value,
+                report_presupuesto: document.getElementById('set-report-ppto').value,
+                report_albaran: document.getElementById('set-report-alb').value,
+            };
+            await fetch('/api/settings', {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify(data),
+            });
+            closeSettingsModal();
+            refresh();
+        }
+
+        // Printer modal
         function openAddModal() {
             document.getElementById('modal-title').textContent = 'Agregar impresora';
             document.getElementById('modal-id').value = '';

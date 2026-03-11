@@ -51,6 +51,11 @@ class PrintStore:
                 enabled INTEGER NOT NULL DEFAULT 1,
                 zones TEXT NOT NULL DEFAULT ''
             );
+
+            CREATE TABLE IF NOT EXISTS settings (
+                key TEXT PRIMARY KEY,
+                value TEXT NOT NULL
+            );
         """)
         # Migrar columna zones si no existe
         try:
@@ -120,6 +125,38 @@ class PrintStore:
     def delete_printer(self, printer_id):
         self._conn.execute("DELETE FROM printers WHERE id=?", (printer_id,))
         self._conn.commit()
+
+    # ─── Settings ──────────────────────────────────────────────────────────
+
+    def get_setting(self, key, default=None):
+        row = self._conn.execute(
+            "SELECT value FROM settings WHERE key=?", (key,)
+        ).fetchone()
+        return row[0] if row else default
+
+    def set_setting(self, key, value):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO settings (key, value) VALUES (?, ?)",
+            (key, str(value)),
+        )
+        self._conn.commit()
+
+    def get_odoo_settings(self):
+        """Retorna config de Odoo (SQLite tiene prioridad sobre env vars)."""
+        import config as cfg
+        return {
+            "odoo_url": self.get_setting("odoo_url", cfg.ODOO_URL),
+            "odoo_db": self.get_setting("odoo_db", cfg.ODOO_DB),
+            "odoo_user": self.get_setting("odoo_user", cfg.ODOO_USER or ""),
+            "odoo_password": self.get_setting("odoo_password", cfg.ODOO_PASSWORD or ""),
+            "report_presupuesto": self.get_setting("report_presupuesto", cfg.REPORT_PRESUPUESTO),
+            "report_albaran": self.get_setting("report_albaran", cfg.REPORT_ALBARAN),
+        }
+
+    def save_odoo_settings(self, settings):
+        for key, value in settings.items():
+            if value is not None:
+                self.set_setting(key, value.strip())
 
     def check_printer_online(self, ip, port=9100, timeout=3):
         try:
