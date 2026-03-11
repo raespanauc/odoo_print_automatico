@@ -48,9 +48,15 @@ class PrintStore:
                 name TEXT NOT NULL UNIQUE,
                 ip TEXT NOT NULL,
                 port INTEGER NOT NULL DEFAULT 9100,
-                enabled INTEGER NOT NULL DEFAULT 1
+                enabled INTEGER NOT NULL DEFAULT 1,
+                zones TEXT NOT NULL DEFAULT ''
             );
         """)
+        # Migrar columna zones si no existe
+        try:
+            self._conn.execute("SELECT zones FROM printers LIMIT 1")
+        except sqlite3.OperationalError:
+            self._conn.execute("ALTER TABLE printers ADD COLUMN zones TEXT NOT NULL DEFAULT ''")
         self._conn.commit()
 
     # ─── Impresoras ──────────────────────────────────────────────────────────
@@ -63,15 +69,16 @@ class PrintStore:
         rows = self._conn.execute(q).fetchall()
         return [dict(r) for r in rows]
 
-    def add_printer(self, name, ip, port=9100):
+    def add_printer(self, name, ip, port=9100, zones=""):
         self._conn.execute(
-            "INSERT OR REPLACE INTO printers (name, ip, port, enabled) "
-            "VALUES (?, ?, ?, 1)",
-            (name.strip(), ip.strip(), port),
+            "INSERT OR REPLACE INTO printers (name, ip, port, enabled, zones) "
+            "VALUES (?, ?, ?, 1, ?)",
+            (name.strip(), ip.strip(), port, zones.strip().upper()),
         )
         self._conn.commit()
 
-    def update_printer(self, printer_id, name=None, ip=None, port=None, enabled=None):
+    def update_printer(self, printer_id, name=None, ip=None, port=None,
+                       enabled=None, zones=None):
         fields = []
         values = []
         if name is not None:
@@ -86,6 +93,9 @@ class PrintStore:
         if enabled is not None:
             fields.append("enabled=?")
             values.append(1 if enabled else 0)
+        if zones is not None:
+            fields.append("zones=?")
+            values.append(zones.strip().upper())
         if not fields:
             return
         values.append(printer_id)
@@ -93,6 +103,19 @@ class PrintStore:
             f"UPDATE printers SET {', '.join(fields)} WHERE id=?", values
         )
         self._conn.commit()
+
+    def get_printers_for_zone(self, zone):
+        """Retorna impresoras habilitadas asignadas a una zona específica."""
+        zone = zone.strip().upper()
+        printers = self.get_printers(only_enabled=True)
+        return [p for p in printers if zone in self._parse_zones(p["zones"])]
+
+    @staticmethod
+    def _parse_zones(zones_str):
+        """Parsea string de zonas 'Z1,Z2,Z3' a set {'Z1','Z2','Z3'}."""
+        if not zones_str:
+            return set()
+        return {z.strip().upper() for z in zones_str.split(",") if z.strip()}
 
     def delete_printer(self, printer_id):
         self._conn.execute("DELETE FROM printers WHERE id=?", (printer_id,))

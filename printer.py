@@ -45,13 +45,20 @@ class PrinterManager:
         if not printers:
             logger.warning("No hay impresoras configuradas en la base de datos")
 
-    def print_pdf(self, pdf_bytes: bytes, doc_name: str = "OdooPrint") -> list:
-        """Envía el PDF a todas las impresoras habilitadas. Retorna resultados."""
-        # Carga impresoras desde DB cada vez (permite agregar sin reiniciar)
-        printers = self.store.get_printers(only_enabled=True)
-        if not printers:
-            logger.warning("No hay impresoras habilitadas para imprimir")
-            return []
+    def print_pdf(self, pdf_bytes: bytes, doc_name: str = "OdooPrint",
+                  zone: str = None) -> list:
+        """Envía el PDF a impresoras. Si zone se especifica, solo a las de esa zona."""
+        if zone:
+            printers = self.store.get_printers_for_zone(zone)
+            if not printers:
+                logger.warning(f"No hay impresoras asignadas a zona {zone}")
+                return []
+            logger.info(f"Zona {zone}: imprimiendo en {[p['name'] for p in printers]}")
+        else:
+            printers = self.store.get_printers(only_enabled=True)
+            if not printers:
+                logger.warning("No hay impresoras habilitadas para imprimir")
+                return []
 
         path = self._save_temp(pdf_bytes)
         results = []

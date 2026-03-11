@@ -33,7 +33,10 @@
         .printer-card.disabled { border-left-color: #999; opacity: 0.6; }
         .printer-card .info { flex: 1; }
         .printer-card .name { font-weight: 600; font-size: 15px; }
-        .printer-card .ip { font-size: 13px; color: #888; font-family: monospace; }
+        .printer-card .ip { font-size: 13px; color: #888; font-family: monospace; margin-bottom: 2px; }
+        .printer-card .zones { font-size: 12px; color: #1565c0; }
+        .printer-card .zones .zone-tag { background: #e3f2fd; padding: 1px 6px; border-radius: 3px; margin-right: 3px; font-weight: 600; }
+        .printer-card .no-zones { font-size: 12px; color: #999; font-style: italic; }
         .printer-card .badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
         .printer-card .badge.on { background: #e8f5e9; color: #2e7d32; }
         .printer-card .badge.off { background: #ffebee; color: #c62828; }
@@ -146,6 +149,9 @@
             <input type="text" id="modal-ip" placeholder="10.69.1.207">
             <label>Puerto</label>
             <input type="number" id="modal-port" value="9100">
+            <label>Zonas (separadas por coma)</label>
+            <input type="text" id="modal-zones" placeholder="Z1,Z2,Z3">
+            <div style="font-size:12px;color:#888;margin-top:4px;">Albaranes se rutean por zona. Dejar vacio = solo presupuestos.</div>
             <div class="modal-actions">
                 <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
                 <button class="btn btn-primary" onclick="savePrinter()">Guardar</button>
@@ -169,6 +175,7 @@
             document.getElementById('modal-name').value = '';
             document.getElementById('modal-ip').value = '';
             document.getElementById('modal-port').value = '9100';
+            document.getElementById('modal-zones').value = '';
             document.getElementById('printer-modal').classList.add('active');
         }
 
@@ -178,6 +185,7 @@
             document.getElementById('modal-name').value = p.name;
             document.getElementById('modal-ip').value = p.ip;
             document.getElementById('modal-port').value = p.port;
+            document.getElementById('modal-zones').value = p.zones || '';
             document.getElementById('printer-modal').classList.add('active');
         }
 
@@ -191,6 +199,7 @@
                 name: document.getElementById('modal-name').value,
                 ip: document.getElementById('modal-ip').value,
                 port: parseInt(document.getElementById('modal-port').value) || 9100,
+                zones: document.getElementById('modal-zones').value,
             };
             if (!data.name || !data.ip) { alert('Nombre e IP son obligatorios'); return; }
 
@@ -229,11 +238,15 @@
                 const cls = !p.enabled ? 'disabled' : (p.online ? 'online' : 'offline');
                 const badge = !p.enabled ? '<span class="badge dis">DESHABILITADA</span>'
                     : (p.online ? '<span class="badge on">EN LINEA</span>' : '<span class="badge off">OFFLINE</span>');
+                const zonesHtml = p.zones
+                    ? '<div class="zones">' + p.zones.split(',').map(z => '<span class="zone-tag">' + z.trim() + '</span>').join('') + '</div>'
+                    : '<div class="no-zones">Sin zonas (solo presupuestos)</div>';
                 return `
                 <div class="printer-card ${cls}">
                     <div class="info">
                         <div class="name">${p.name}</div>
                         <div class="ip">${p.ip}:${p.port}</div>
+                        ${zonesHtml}
                         <div class="actions">
                             <button onclick='openEditModal(${JSON.stringify(p)})'>Editar</button>
                             <button onclick="togglePrinter(${p.id}, ${p.enabled})">${p.enabled ? 'Deshabilitar' : 'Habilitar'}</button>

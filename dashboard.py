@@ -73,10 +73,11 @@ def api_printers_add():
     name = data.get("name", "").strip()
     ip = data.get("ip", "").strip()
     port = int(data.get("port", 9100))
+    zones = data.get("zones", "").strip()
     if not name or not ip:
         return jsonify({"error": "name e ip son obligatorios"}), 400
-    store.add_printer(name, ip, port)
-    logger.info(f"Impresora agregada: {name} ({ip}:{port})")
+    store.add_printer(name, ip, port, zones)
+    logger.info(f"Impresora agregada: {name} ({ip}:{port}) zonas={zones}")
     return jsonify({"ok": True})
 
 
@@ -89,6 +90,7 @@ def api_printers_update(pid):
         ip=data.get("ip"),
         port=data.get("port"),
         enabled=data.get("enabled"),
+        zones=data.get("zones"),
     )
     logger.info(f"Impresora {pid} actualizada")
     return jsonify({"ok": True})

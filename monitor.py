@@ -5,6 +5,7 @@ en todas las impresoras configuradas.
 """
 
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -37,6 +38,18 @@ logger.add(
 LEGACY_FILE = os.path.join(BASE_DIR, "printed_ids.json")
 DATA_DIR = os.path.join(BASE_DIR, "data")
 LEGACY_FILE_ALT = os.path.join(DATA_DIR, "printed_ids.json")
+
+
+# ─── Utilidades ──────────────────────────────────────────────────────────────
+
+# Extrae zona del nombre del albarán: "01/OUT/377998 - Z1 - 01 de 02" → "Z1"
+_ZONE_RE = re.compile(r"- (Z\d+) -", re.IGNORECASE)
+
+
+def extract_zone(picking_name: str) -> str | None:
+    """Extrae la zona (Z1, Z2, etc.) del nombre del albarán."""
+    m = _ZONE_RE.search(picking_name)
+    return m.group(1).upper() if m else None
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
@@ -162,8 +175,13 @@ def main():
                             continue
 
                         try:
+                            zone = extract_zone(pname)
+                            if zone:
+                                logger.info(f"Albaran {pname} → zona {zone}")
                             pdf = client.download_pdf(pid, config.REPORT_ALBARAN)
-                            results = printer.print_pdf(pdf, doc_name=f"Albaran {pname}")
+                            results = printer.print_pdf(
+                                pdf, doc_name=f"Albaran {pname}", zone=zone,
+                            )
                             any_ok = False
                             for r in results:
                                 store.record_print(
