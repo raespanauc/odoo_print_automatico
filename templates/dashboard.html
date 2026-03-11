@@ -82,6 +82,7 @@
     <header>
         <h1>OdooPrint Monitor</h1>
         <div class="status">
+            <span id="odoo-info" style="font-size:12px;opacity:0.7;margin-right:12px;"></span>
             <span id="clock"></span>
             <span class="dot" id="monitor-dot"></span>
             <span id="monitor-label">Cargando...</span>
@@ -273,6 +274,12 @@
                 } else {
                     dot.className = 'dot red';
                     label.textContent = 'Detenido';
+                }
+
+                // Odoo connection info
+                if (data.state && data.state.odoo_url) {
+                    document.getElementById('odoo-info').textContent =
+                        data.state.odoo_db + ' @ ' + data.state.odoo_url.replace('https://', '');
                 }
 
                 // Stats

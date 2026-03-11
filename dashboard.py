@@ -19,6 +19,8 @@ _monitor_state = {
     "running": False,
     "last_poll": None,
     "last_order": None,
+    "odoo_url": config.ODOO_URL,
+    "odoo_db": config.ODOO_DB,
 }
 _state_lock = threading.Lock()
 
