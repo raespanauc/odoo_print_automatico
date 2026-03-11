@@ -15,6 +15,8 @@ from loguru import logger
 import config
 from odoo_client import OdooClient
 from printer import PrinterManager
+from print_store import PrintStore
+from dashboard import start_dashboard, update_state
 
 # ─── Logging ──────────────────────────────────────────────────────────────────
 
@@ -31,28 +33,11 @@ logger.add(
     level=config.LOG_LEVEL,
 )
 
-# ─── Registro local de IDs impresos ──────────────────────────────────────────
+# ─── Migración legacy ────────────────────────────────────────────────────────
 
-# En Docker usa /app/data, en local usa el directorio del proyecto
-DATA_DIR = os.path.join(BASE_DIR, "data") if os.path.isdir(os.path.join(BASE_DIR, "data")) else BASE_DIR
-PRINTED_FILE = os.path.join(DATA_DIR, "printed_ids.json")
-
-
-def load_printed_ids() -> dict:
-    """Carga registro de IDs impresos: {orders: [...], pickings: [...]}"""
-    if os.path.exists(PRINTED_FILE):
-        with open(PRINTED_FILE, "r") as f:
-            data = json.load(f)
-            # Migrar formato antiguo (lista plana)
-            if isinstance(data, list):
-                return {"orders": [], "pickings": data}
-            return data
-    return {"orders": [], "pickings": []}
-
-
-def save_printed_ids(data: dict):
-    with open(PRINTED_FILE, "w") as f:
-        json.dump(data, f, indent=2)
+LEGACY_FILE = os.path.join(BASE_DIR, "printed_ids.json")
+DATA_DIR = os.path.join(BASE_DIR, "data")
+LEGACY_FILE_ALT = os.path.join(DATA_DIR, "printed_ids.json")
 
 
 # ─── Main loop ────────────────────────────────────────────────────────────────
@@ -70,6 +55,16 @@ def main():
         logger.error("PRINTER_NAMES es obligatorio. Revisa el archivo .env")
         sys.exit(1)
 
+    # Inicializar store y migrar datos legacy
+    store = PrintStore()
+    for legacy in (LEGACY_FILE, LEGACY_FILE_ALT):
+        if os.path.exists(legacy):
+            count = store.import_from_json(legacy)
+            if count:
+                logger.info(f"Migrados {count} registros desde {legacy}")
+            # Renombrar para no re-importar
+            os.rename(legacy, legacy + ".bak")
+
     # Inicializar cliente Odoo
     client = OdooClient(
         url=config.ODOO_URL,
@@ -86,20 +81,19 @@ def main():
         sys.exit(1)
 
     # Inicializar impresoras
-    try:
-        printer = PrinterManager(config.PRINTER_NAMES, config.PRINTER_IPS)
-    except RuntimeError as e:
-        logger.error(str(e))
-        sys.exit(1)
+    printer = PrinterManager(config.PRINTER_NAMES, config.PRINTER_IPS)
 
-    # Cargar registro de impresos
-    printed = load_printed_ids()
-    printed_orders = set(printed["orders"])
-    printed_pickings = set(printed["pickings"])
+    # Cargar IDs ya impresos
+    printed_orders = store.get_printed_order_ids()
+    printed_pickings = store.get_printed_picking_ids()
     logger.info(
-        f"Registro local: {len(printed_orders)} ordenes, "
+        f"Registro: {len(printed_orders)} ordenes, "
         f"{len(printed_pickings)} albaranes previamente impresos"
     )
+
+    # Iniciar dashboard web
+    start_dashboard()
+    update_state(running=True)
 
     # Timestamp de inicio
     last_check = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
@@ -109,6 +103,7 @@ def main():
     while True:
         try:
             orders = client.get_confirmed_orders(last_check)
+            update_state(last_poll=datetime.now(timezone.utc).isoformat())
 
             for order in orders:
                 oid = order["id"]
@@ -118,16 +113,28 @@ def main():
                     continue
 
                 logger.info(f"Nuevo pedido confirmado: {oname} (id={oid})")
+                update_state(last_order=oname)
 
                 # 1. Imprimir PRESUPUESTO 80MM
                 try:
                     pdf = client.download_pdf(oid, config.REPORT_PRESUPUESTO)
-                    ok = printer.print_pdf(pdf, doc_name=f"Presupuesto {oname}")
-                    if not ok:
-                        logger.error(f"Fallo impresion presupuesto {oname}")
+                    results = printer.print_pdf(pdf, doc_name=f"Presupuesto {oname}")
+                    any_ok = False
+                    for r in results:
+                        store.record_print(
+                            "presupuesto", oname, oid, r["printer"],
+                            r["status"], r.get("error"),
+                        )
+                        if r["status"] == "ok":
+                            any_ok = True
+                    if not any_ok:
+                        logger.error(f"Fallo impresion presupuesto {oname} en todas las impresoras")
                         continue
                 except Exception as e:
                     logger.error(f"Error PDF presupuesto {oname}: {e}")
+                    store.record_print(
+                        "presupuesto", oname, oid, "N/A", "error", str(e),
+                    )
                     continue
 
                 # Pausa para que la impresora procese el presupuesto
@@ -146,22 +153,29 @@ def main():
 
                         try:
                             pdf = client.download_pdf(pid, config.REPORT_ALBARAN)
-                            ok = printer.print_pdf(pdf, doc_name=f"Albaran {pname}")
-                            if ok:
+                            results = printer.print_pdf(pdf, doc_name=f"Albaran {pname}")
+                            any_ok = False
+                            for r in results:
+                                store.record_print(
+                                    "albaran", pname, pid, r["printer"],
+                                    r["status"], r.get("error"),
+                                )
+                                if r["status"] == "ok":
+                                    any_ok = True
+                            if any_ok:
                                 printed_pickings.add(pid)
                                 logger.info(f"OK albaran {pname} impreso")
-                                time.sleep(3)  # Pausa entre albaranes
+                                time.sleep(3)
                             else:
                                 logger.error(f"Fallo impresion albaran {pname}")
                         except Exception as e:
                             logger.error(f"Error PDF albaran {pname}: {e}")
+                            store.record_print(
+                                "albaran", pname, pid, "N/A", "error", str(e),
+                            )
 
                 # Marcar orden como impresa
                 printed_orders.add(oid)
-                save_printed_ids({
-                    "orders": sorted(printed_orders),
-                    "pickings": sorted(printed_pickings),
-                })
                 logger.info(f"OK {oname} procesado completamente")
 
             # Actualizar timestamp

@@ -1,0 +1,223 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>OdooPrint Monitor</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #f0f2f5; color: #1a1a2e; }
+
+        header { background: #1a1a2e; color: #fff; padding: 16px 24px; display: flex; justify-content: space-between; align-items: center; }
+        header h1 { font-size: 20px; font-weight: 600; }
+        header .status { display: flex; align-items: center; gap: 8px; font-size: 14px; }
+        header .dot { width: 10px; height: 10px; border-radius: 50%; display: inline-block; }
+        header .dot.green { background: #4caf50; box-shadow: 0 0 6px #4caf50; }
+        header .dot.red { background: #f44336; }
+
+        .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+        /* Stats bar */
+        .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
+        .stat-card { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
+        .stat-card .label { font-size: 13px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
+        .stat-card .value { font-size: 32px; font-weight: 700; margin-top: 4px; }
+        .stat-card .value.green { color: #4caf50; }
+        .stat-card .value.red { color: #f44336; }
+        .stat-card .value.blue { color: #2196f3; }
+
+        /* Printers */
+        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #333; }
+        .printers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 24px; }
+        .printer-card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 12px; border-left: 4px solid #ccc; }
+        .printer-card.online { border-left-color: #4caf50; }
+        .printer-card.offline { border-left-color: #f44336; }
+        .printer-card .info { flex: 1; }
+        .printer-card .name { font-weight: 600; font-size: 15px; }
+        .printer-card .ip { font-size: 13px; color: #888; font-family: monospace; }
+        .printer-card .badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
+        .printer-card .badge.on { background: #e8f5e9; color: #2e7d32; }
+        .printer-card .badge.off { background: #ffebee; color: #c62828; }
+
+        /* Jobs table */
+        .table-wrap { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
+        table { width: 100%; border-collapse: collapse; font-size: 14px; }
+        thead { background: #f5f5f5; }
+        th { text-align: left; padding: 12px 16px; font-weight: 600; color: #555; font-size: 13px; text-transform: uppercase; letter-spacing: 0.3px; }
+        td { padding: 10px 16px; border-top: 1px solid #f0f0f0; }
+        tr:hover { background: #fafafa; }
+        .badge-type { font-size: 11px; padding: 2px 8px; border-radius: 4px; font-weight: 600; text-transform: uppercase; }
+        .badge-type.presupuesto { background: #e3f2fd; color: #1565c0; }
+        .badge-type.albaran { background: #fff3e0; color: #e65100; }
+        .status-ok { color: #4caf50; font-weight: 600; }
+        .status-error { color: #f44336; font-weight: 600; }
+        .error-msg { font-size: 12px; color: #999; }
+        .empty-msg { text-align: center; padding: 40px; color: #999; }
+
+        .refresh-info { text-align: center; color: #aaa; font-size: 12px; margin-top: 16px; }
+    </style>
+</head>
+<body>
+    <header>
+        <h1>OdooPrint Monitor</h1>
+        <div class="status">
+            <span id="clock"></span>
+            <span class="dot" id="monitor-dot"></span>
+            <span id="monitor-label">Cargando...</span>
+        </div>
+    </header>
+
+    <div class="container">
+        <!-- Stats -->
+        <div class="stats" id="stats-section">
+            <div class="stat-card">
+                <div class="label">Presupuestos</div>
+                <div class="value blue" id="stat-orders">{{ stats.orders_printed }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Albaranes</div>
+                <div class="value blue" id="stat-pickings">{{ stats.pickings_printed }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Total impresiones</div>
+                <div class="value" id="stat-total">{{ stats.ok }}</div>
+            </div>
+            <div class="stat-card">
+                <div class="label">Errores</div>
+                <div class="value red" id="stat-errors">{{ stats.errors }}</div>
+            </div>
+        </div>
+
+        <!-- Printers -->
+        <div class="section-title">Impresoras</div>
+        <div class="printers" id="printers-section">
+            {% for p in printers %}
+            <div class="printer-card {{ 'online' if p.online else 'offline' }}">
+                <div class="info">
+                    <div class="name">{{ p.name }}</div>
+                    <div class="ip">{{ p.ip }}:9100</div>
+                </div>
+                <span class="badge {{ 'on' if p.online else 'off' }}">
+                    {{ 'EN LINEA' if p.online else 'OFFLINE' }}
+                </span>
+            </div>
+            {% endfor %}
+        </div>
+
+        <!-- Recent jobs -->
+        <div class="section-title">Ultimas impresiones</div>
+        <div class="table-wrap">
+            <table>
+                <thead>
+                    <tr>
+                        <th>Hora</th>
+                        <th>Tipo</th>
+                        <th>Documento</th>
+                        <th>Impresora</th>
+                        <th>Estado</th>
+                    </tr>
+                </thead>
+                <tbody id="jobs-tbody">
+                    {% if recent %}
+                        {% for job in recent %}
+                        <tr>
+                            <td>{{ job.timestamp }}</td>
+                            <td><span class="badge-type {{ job.doc_type }}">{{ job.doc_type }}</span></td>
+                            <td>{{ job.doc_name }}</td>
+                            <td>{{ job.printer }}</td>
+                            <td>
+                                {% if job.status == 'ok' %}
+                                    <span class="status-ok">OK</span>
+                                {% else %}
+                                    <span class="status-error">ERROR</span>
+                                    {% if job.error_msg %}
+                                        <div class="error-msg">{{ job.error_msg }}</div>
+                                    {% endif %}
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr><td colspan="5" class="empty-msg">Sin impresiones registradas</td></tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+
+        <div class="refresh-info">Auto-refresh cada 5 segundos</div>
+    </div>
+
+    <script>
+        function updateClock() {
+            document.getElementById('clock').textContent =
+                new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
+        }
+        setInterval(updateClock, 1000);
+        updateClock();
+
+        async function refresh() {
+            try {
+                const res = await fetch('/api/status');
+                const data = await res.json();
+
+                // Monitor state
+                const dot = document.getElementById('monitor-dot');
+                const label = document.getElementById('monitor-label');
+                if (data.state && data.state.running) {
+                    dot.className = 'dot green';
+                    label.textContent = 'Monitoreando';
+                } else {
+                    dot.className = 'dot red';
+                    label.textContent = 'Detenido';
+                }
+
+                // Stats
+                document.getElementById('stat-orders').textContent = data.stats.orders_printed;
+                document.getElementById('stat-pickings').textContent = data.stats.pickings_printed;
+                document.getElementById('stat-total').textContent = data.stats.ok;
+                document.getElementById('stat-errors').textContent = data.stats.errors;
+
+                // Printers
+                const pc = document.getElementById('printers-section');
+                pc.innerHTML = data.printers.map(p => `
+                    <div class="printer-card ${p.online ? 'online' : 'offline'}">
+                        <div class="info">
+                            <div class="name">${p.name}</div>
+                            <div class="ip">${p.ip}:9100</div>
+                        </div>
+                        <span class="badge ${p.online ? 'on' : 'off'}">
+                            ${p.online ? 'EN LINEA' : 'OFFLINE'}
+                        </span>
+                    </div>
+                `).join('');
+
+                // Jobs
+                const tbody = document.getElementById('jobs-tbody');
+                if (data.recent.length === 0) {
+                    tbody.innerHTML = '<tr><td colspan="5" class="empty-msg">Sin impresiones registradas</td></tr>';
+                } else {
+                    tbody.innerHTML = data.recent.map(j => `
+                        <tr>
+                            <td>${j.timestamp}</td>
+                            <td><span class="badge-type ${j.doc_type}">${j.doc_type}</span></td>
+                            <td>${j.doc_name}</td>
+                            <td>${j.printer}</td>
+                            <td>
+                                ${j.status === 'ok'
+                                    ? '<span class="status-ok">OK</span>'
+                                    : '<span class="status-error">ERROR</span>' +
+                                      (j.error_msg ? '<div class="error-msg">' + j.error_msg + '</div>' : '')}
+                            </td>
+                        </tr>
+                    `).join('');
+                }
+            } catch (e) {
+                console.error('Error refreshing:', e);
+            }
+        }
+
+        setInterval(refresh, 5000);
+        refresh();
+    </script>
+</body>
+</html>

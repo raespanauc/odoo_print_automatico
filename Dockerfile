@@ -7,8 +7,13 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-RUN pip install --no-cache-dir requests python-dotenv loguru Pillow
+RUN pip install --no-cache-dir requests python-dotenv loguru Pillow flask
 
-COPY config.py odoo_client.py printer.py monitor.py ./
+COPY config.py odoo_client.py printer.py monitor.py print_store.py dashboard.py ./
+COPY templates/ templates/
+
+RUN mkdir -p /app/data
+
+EXPOSE 5000
 
 CMD ["python", "monitor.py"]

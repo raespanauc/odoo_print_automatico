@@ -40,7 +40,7 @@ class PrinterManager:
             self._init_linux(printer_names)
 
         if not self.printers:
-            raise RuntimeError("No se encontraron impresoras válidas")
+            logger.warning("No se encontraron impresoras configuradas")
 
     def _init_windows(self, printer_names):
         installed = [
@@ -63,20 +63,20 @@ class PrinterManager:
                 continue
             ip = self.printer_ips.get(name)
             if ip:
+                self.printers.append(name)
                 try:
                     s = socket.create_connection((ip, 9100), timeout=5)
                     s.close()
-                    self.printers.append(name)
                     logger.info(f"Impresora verificada (red): {name} ({ip}:9100)")
                 except Exception as e:
-                    logger.warning(f"Impresora {name} ({ip}:9100) no accesible: {e}")
+                    logger.warning(f"Impresora {name} ({ip}:9100) no accesible al inicio: {e}")
             else:
                 logger.warning(f"Impresora {name} sin IP configurada en PRINTER_IPS")
 
-    def print_pdf(self, pdf_bytes: bytes, doc_name: str = "OdooPrint") -> bool:
-        """Envía el PDF a todas las impresoras configuradas."""
+    def print_pdf(self, pdf_bytes: bytes, doc_name: str = "OdooPrint") -> list:
+        """Envía el PDF a todas las impresoras. Retorna lista de resultados."""
         path = self._save_temp(pdf_bytes)
-        all_ok = True
+        results = []
         try:
             for printer_name in self.printers:
                 try:
@@ -85,12 +85,17 @@ class PrinterManager:
                     else:
                         self._print_escpos(path, printer_name)
                     logger.info(f"Enviado a {printer_name}: {doc_name}")
+                    results.append({"printer": printer_name, "status": "ok"})
                 except Exception as e:
                     logger.error(f"Error imprimiendo en {printer_name}: {e}")
-                    all_ok = False
+                    results.append({
+                        "printer": printer_name,
+                        "status": "error",
+                        "error": str(e),
+                    })
         finally:
             self._cleanup(path)
-        return all_ok
+        return results
 
     # ─── Windows: SumatraPDF ──────────────────────────────────────────────────
 
@@ -220,8 +225,8 @@ class PrinterManager:
             has_content.append(dark_count >= min_dark_pixels)
 
         # Buscar desde arriba el último bloque de contenido antes de un gap grande
-        # Un gap de >100 filas blancas indica separación contenido/footer
-        GAP_THRESHOLD = 100
+        # Un gap de >300 filas blancas indica separación contenido/footer
+        GAP_THRESHOLD = 300
         gap_start = None
         consecutive_white = 0
         main_content_end = height

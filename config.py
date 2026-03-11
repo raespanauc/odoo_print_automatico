@@ -42,3 +42,6 @@ REPORT_PRESUPUESTO = os.getenv(
 
 # Reporte de albarán para stock.picking
 REPORT_ALBARAN = os.getenv("REPORT_ALBARAN", "stock.report_deliveryslip")
+
+# Dashboard web
+DASHBOARD_PORT = int(os.getenv("DASHBOARD_PORT", "5000"))
