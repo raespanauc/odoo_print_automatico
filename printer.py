@@ -117,12 +117,10 @@ class PrinterManager:
 
         tmpdir = tempfile.mkdtemp(prefix="odoo_img_")
         try:
-            # 1. Convertir PDF a imágenes PNG
+            # 1. Convertir PDF a imágenes PNG a alta resolución (sin escalar)
             subprocess.run([
-                "pdftoppm", "-png", "-r", "203",
+                "pdftoppm", "-png", "-r", "300",
                 "-cropbox",
-                "-scale-to-x", str(THERMAL_WIDTH_PX),
-                "-scale-to-y", "-1",
                 pdf_path,
                 os.path.join(tmpdir, "page"),
             ], capture_output=True, timeout=30, check=True)
@@ -135,7 +133,7 @@ class PrinterManager:
                 raise RuntimeError("pdftoppm no generó imágenes")
 
             # 2. Procesar y enviar por socket
-            from PIL import Image
+            from PIL import Image, ImageFilter
 
             with socket.create_connection((ip, port), timeout=60) as sock:
                 sock.sendall(ESCPOS_INIT)
@@ -144,14 +142,20 @@ class PrinterManager:
                     img = Image.open(page_path).convert("L")
                     logger.info(f"Imagen original: {img.width}x{img.height}px")
 
-                    # Redimensionar al ancho exacto
+                    # Redimensionar al ancho exacto con alta calidad
                     if img.width != THERMAL_WIDTH_PX:
                         ratio = THERMAL_WIDTH_PX / img.width
-                        img = img.resize((THERMAL_WIDTH_PX, int(img.height * ratio)))
+                        new_h = int(img.height * ratio)
+                        img = img.resize(
+                            (THERMAL_WIDTH_PX, new_h), Image.LANCZOS,
+                        )
 
                     # Recortar espacio en blanco inferior
                     img = self._trim_bottom(img)
                     logger.info(f"Imagen recortada: {img.width}x{img.height}px")
+
+                    # Enfocar para mejorar nitidez de códigos de barras
+                    img = img.filter(ImageFilter.SHARPEN)
 
                     # Convertir a 1-bit blanco y negro
                     img = img.point(lambda x: 0 if x < 128 else 255, "1")
