@@ -117,10 +117,14 @@ class PrinterManager:
 
         tmpdir = tempfile.mkdtemp(prefix="odoo_img_")
         try:
-            # 1. Convertir PDF a imágenes PNG a alta resolución (sin escalar)
+            # 1. Convertir PDF a PNG a 576px de ancho directo desde vector
+            #    pdftoppm renderiza desde el PDF vectorial al tamaño exacto,
+            #    sin necesidad de escalar con PIL (mejor para barcodes)
             subprocess.run([
                 "pdftoppm", "-png", "-r", "300",
                 "-cropbox",
+                "-scale-to-x", str(THERMAL_WIDTH_PX),
+                "-scale-to-y", "-1",
                 pdf_path,
                 os.path.join(tmpdir, "page"),
             ], capture_output=True, timeout=30, check=True)
@@ -133,7 +137,7 @@ class PrinterManager:
                 raise RuntimeError("pdftoppm no generó imágenes")
 
             # 2. Procesar y enviar por socket
-            from PIL import Image, ImageEnhance
+            from PIL import Image
 
             with socket.create_connection((ip, port), timeout=60) as sock:
                 sock.sendall(ESCPOS_INIT)
@@ -142,23 +146,12 @@ class PrinterManager:
                     img = Image.open(page_path).convert("L")
                     logger.info(f"Imagen original: {img.width}x{img.height}px")
 
-                    # Redimensionar al ancho exacto con alta calidad
-                    if img.width != THERMAL_WIDTH_PX:
-                        ratio = THERMAL_WIDTH_PX / img.width
-                        new_h = int(img.height * ratio)
-                        img = img.resize(
-                            (THERMAL_WIDTH_PX, new_h), Image.LANCZOS,
-                        )
-
                     # Recortar espacio en blanco inferior
                     img = self._trim_bottom(img)
                     logger.info(f"Imagen recortada: {img.width}x{img.height}px")
 
-                    # Aumentar contraste para barras nítidas en barcodes
-                    img = ImageEnhance.Contrast(img).enhance(2.0)
-
-                    # Convertir a 1-bit con threshold alto (barras más gruesas)
-                    img = img.point(lambda x: 0 if x < 160 else 255, "1")
+                    # Convertir a 1-bit blanco y negro (threshold limpio)
+                    img = img.point(lambda x: 0 if x < 128 else 255, "1")
 
                     # Enviar en bandas para no desbordar buffer
                     self._send_image_bands(sock, img)
