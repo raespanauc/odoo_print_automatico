@@ -1,9 +1,10 @@
 """
-PrintStore — Registro persistente de impresiones usando SQLite.
+PrintStore — Registro persistente de impresiones e impresoras usando SQLite.
 Thread-safe para uso concurrente entre monitor y dashboard.
 """
 
 import os
+import socket
 import sqlite3
 import threading
 from datetime import datetime, timezone
@@ -41,10 +42,94 @@ class PrintStore:
                 ON print_jobs(record_id, doc_type);
             CREATE INDEX IF NOT EXISTS idx_timestamp
                 ON print_jobs(timestamp DESC);
+
+            CREATE TABLE IF NOT EXISTS printers (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE,
+                ip TEXT NOT NULL,
+                port INTEGER NOT NULL DEFAULT 9100,
+                enabled INTEGER NOT NULL DEFAULT 1
+            );
         """)
         self._conn.commit()
 
-    # ─── Escritura ───────────────────────────────────────────────────────────
+    # ─── Impresoras ──────────────────────────────────────────────────────────
+
+    def get_printers(self, only_enabled=False):
+        q = "SELECT * FROM printers"
+        if only_enabled:
+            q += " WHERE enabled=1"
+        q += " ORDER BY name"
+        rows = self._conn.execute(q).fetchall()
+        return [dict(r) for r in rows]
+
+    def add_printer(self, name, ip, port=9100):
+        self._conn.execute(
+            "INSERT OR REPLACE INTO printers (name, ip, port, enabled) "
+            "VALUES (?, ?, ?, 1)",
+            (name.strip(), ip.strip(), port),
+        )
+        self._conn.commit()
+
+    def update_printer(self, printer_id, name=None, ip=None, port=None, enabled=None):
+        fields = []
+        values = []
+        if name is not None:
+            fields.append("name=?")
+            values.append(name.strip())
+        if ip is not None:
+            fields.append("ip=?")
+            values.append(ip.strip())
+        if port is not None:
+            fields.append("port=?")
+            values.append(port)
+        if enabled is not None:
+            fields.append("enabled=?")
+            values.append(1 if enabled else 0)
+        if not fields:
+            return
+        values.append(printer_id)
+        self._conn.execute(
+            f"UPDATE printers SET {', '.join(fields)} WHERE id=?", values
+        )
+        self._conn.commit()
+
+    def delete_printer(self, printer_id):
+        self._conn.execute("DELETE FROM printers WHERE id=?", (printer_id,))
+        self._conn.commit()
+
+    def check_printer_online(self, ip, port=9100, timeout=3):
+        try:
+            s = socket.create_connection((ip, port), timeout=timeout)
+            s.close()
+            return True
+        except Exception:
+            return False
+
+    def get_printers_with_status(self):
+        printers = self.get_printers()
+        for p in printers:
+            p["online"] = self.check_printer_online(p["ip"], p["port"])
+        return printers
+
+    # ─── Migración desde env vars ────────────────────────────────────────────
+
+    def import_from_env(self, printer_names, printer_ips):
+        """Importa impresoras desde variables de entorno (una sola vez)."""
+        count = 0
+        for name in printer_names:
+            name = name.strip()
+            ip = printer_ips.get(name, "")
+            if name and ip:
+                existing = self._conn.execute(
+                    "SELECT 1 FROM printers WHERE name=?", (name,)
+                ).fetchone()
+                if not existing:
+                    self.add_printer(name, ip)
+                    count += 1
+        return count
+
+    # ─── Print jobs ──────────────────────────────────────────────────────────
 
     def record_print(self, doc_type, doc_name, record_id, printer,
                      status="ok", error_msg=None):
@@ -56,8 +141,6 @@ class PrintStore:
              doc_type, doc_name, record_id, printer, status, error_msg),
         )
         self._conn.commit()
-
-    # ─── Consultas ───────────────────────────────────────────────────────────
 
     def is_printed(self, record_id, doc_type):
         row = self._conn.execute(
@@ -132,7 +215,7 @@ class PrintStore:
                     "INSERT INTO print_jobs "
                     "(timestamp, doc_type, doc_name, record_id, printer, status) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (ts, "presupuesto", f"(migrado)", oid, "migrado", "ok"),
+                    (ts, "presupuesto", "(migrado)", oid, "migrado", "ok"),
                 )
                 count += 1
         for pid in data.get("pickings", []):
@@ -141,7 +224,7 @@ class PrintStore:
                     "INSERT INTO print_jobs "
                     "(timestamp, doc_type, doc_name, record_id, printer, status) "
                     "VALUES (?, ?, ?, ?, ?, ?)",
-                    (ts, "albaran", f"(migrado)", pid, "migrado", "ok"),
+                    (ts, "albaran", "(migrado)", pid, "migrado", "ok"),
                 )
                 count += 1
         self._conn.commit()

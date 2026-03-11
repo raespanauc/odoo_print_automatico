@@ -3,10 +3,9 @@ Dashboard web para OdooPrintMonitor.
 Se ejecuta en un hilo de fondo desde monitor.py.
 """
 
-import socket
 import threading
 
-from flask import Flask, render_template, jsonify
+from flask import Flask, render_template, jsonify, request
 from loguru import logger
 
 import config
@@ -29,22 +28,9 @@ def update_state(**kwargs):
         _monitor_state.update(kwargs)
 
 
-def _check_printer(ip, port=9100, timeout=3):
-    try:
-        s = socket.create_connection((ip, port), timeout=timeout)
-        s.close()
-        return True
-    except Exception:
-        return False
-
-
 @app.route("/")
 def index():
-    printers = []
-    for name in config.PRINTER_NAMES:
-        ip = config.PRINTER_IPS.get(name, "")
-        online = _check_printer(ip) if ip else False
-        printers.append({"name": name, "ip": ip, "online": online})
+    printers = store.get_printers_with_status()
 
     with _state_lock:
         state = dict(_monitor_state)
@@ -60,11 +46,7 @@ def index():
 
 @app.route("/api/status")
 def api_status():
-    printers = []
-    for name in config.PRINTER_NAMES:
-        ip = config.PRINTER_IPS.get(name, "")
-        online = _check_printer(ip) if ip else False
-        printers.append({"name": name, "ip": ip, "online": online})
+    printers = store.get_printers_with_status()
 
     with _state_lock:
         state = dict(_monitor_state)
@@ -75,6 +57,48 @@ def api_status():
         "recent": store.get_recent_jobs(20),
         "state": state,
     })
+
+
+# ─── CRUD Impresoras ─────────────────────────────────────────────────────────
+
+
+@app.route("/api/printers", methods=["GET"])
+def api_printers_list():
+    return jsonify(store.get_printers_with_status())
+
+
+@app.route("/api/printers", methods=["POST"])
+def api_printers_add():
+    data = request.json
+    name = data.get("name", "").strip()
+    ip = data.get("ip", "").strip()
+    port = int(data.get("port", 9100))
+    if not name or not ip:
+        return jsonify({"error": "name e ip son obligatorios"}), 400
+    store.add_printer(name, ip, port)
+    logger.info(f"Impresora agregada: {name} ({ip}:{port})")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/printers/<int:pid>", methods=["PUT"])
+def api_printers_update(pid):
+    data = request.json
+    store.update_printer(
+        pid,
+        name=data.get("name"),
+        ip=data.get("ip"),
+        port=data.get("port"),
+        enabled=data.get("enabled"),
+    )
+    logger.info(f"Impresora {pid} actualizada")
+    return jsonify({"ok": True})
+
+
+@app.route("/api/printers/<int:pid>", methods=["DELETE"])
+def api_printers_delete(pid):
+    store.delete_printer(pid)
+    logger.info(f"Impresora {pid} eliminada")
+    return jsonify({"ok": True})
 
 
 def start_dashboard(port=None):

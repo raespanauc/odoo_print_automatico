@@ -4,7 +4,6 @@ Monitorea presupuestos confirmados en Odoo y los imprime automáticamente
 en todas las impresoras configuradas.
 """
 
-import json
 import os
 import sys
 import time
@@ -51,19 +50,30 @@ def main():
         logger.error("ODOO_USER y ODOO_PASSWORD son obligatorios. Revisa el archivo .env")
         sys.exit(1)
 
-    if not config.PRINTER_NAMES:
-        logger.error("PRINTER_NAMES es obligatorio. Revisa el archivo .env")
-        sys.exit(1)
-
-    # Inicializar store y migrar datos legacy
+    # Inicializar store
     store = PrintStore()
+
+    # Migrar datos legacy (printed_ids.json)
     for legacy in (LEGACY_FILE, LEGACY_FILE_ALT):
         if os.path.exists(legacy):
             count = store.import_from_json(legacy)
             if count:
                 logger.info(f"Migrados {count} registros desde {legacy}")
-            # Renombrar para no re-importar
             os.rename(legacy, legacy + ".bak")
+
+    # Migrar impresoras desde env vars (solo la primera vez)
+    if config.PRINTER_NAMES and config.PRINTER_IPS:
+        count = store.import_from_env(config.PRINTER_NAMES, config.PRINTER_IPS)
+        if count:
+            logger.info(f"Migradas {count} impresoras desde variables de entorno")
+
+    # Verificar que hay impresoras
+    printers_db = store.get_printers(only_enabled=True)
+    if not printers_db:
+        logger.warning(
+            "No hay impresoras configuradas. "
+            "Agregá impresoras desde el dashboard web."
+        )
 
     # Inicializar cliente Odoo
     client = OdooClient(
@@ -80,8 +90,8 @@ def main():
         logger.error(f"Error en conexión inicial: {e}")
         sys.exit(1)
 
-    # Inicializar impresoras
-    printer = PrinterManager(config.PRINTER_NAMES, config.PRINTER_IPS)
+    # Inicializar impresoras desde DB
+    printer = PrinterManager(store)
 
     # Cargar IDs ya impresos
     printed_orders = store.get_printed_order_ids()

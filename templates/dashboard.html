@@ -17,7 +17,6 @@
 
         .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
 
-        /* Stats bar */
         .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 16px; margin-bottom: 24px; }
         .stat-card { background: #fff; border-radius: 10px; padding: 20px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); }
         .stat-card .label { font-size: 13px; color: #666; text-transform: uppercase; letter-spacing: 0.5px; }
@@ -26,20 +25,39 @@
         .stat-card .value.red { color: #f44336; }
         .stat-card .value.blue { color: #2196f3; }
 
-        /* Printers */
-        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #333; }
-        .printers { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 12px; margin-bottom: 24px; }
+        .section-title { font-size: 16px; font-weight: 600; margin-bottom: 12px; color: #333; display: flex; justify-content: space-between; align-items: center; }
+        .printers { display: grid; grid-template-columns: repeat(auto-fit, minmax(280px, 1fr)); gap: 12px; margin-bottom: 24px; }
         .printer-card { background: #fff; border-radius: 10px; padding: 16px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); display: flex; align-items: center; gap: 12px; border-left: 4px solid #ccc; }
         .printer-card.online { border-left-color: #4caf50; }
         .printer-card.offline { border-left-color: #f44336; }
+        .printer-card.disabled { border-left-color: #999; opacity: 0.6; }
         .printer-card .info { flex: 1; }
         .printer-card .name { font-weight: 600; font-size: 15px; }
         .printer-card .ip { font-size: 13px; color: #888; font-family: monospace; }
         .printer-card .badge { font-size: 12px; padding: 3px 10px; border-radius: 12px; font-weight: 600; }
         .printer-card .badge.on { background: #e8f5e9; color: #2e7d32; }
         .printer-card .badge.off { background: #ffebee; color: #c62828; }
+        .printer-card .badge.dis { background: #f5f5f5; color: #999; }
+        .printer-card .actions { display: flex; gap: 6px; margin-top: 6px; }
+        .printer-card .actions button { font-size: 11px; padding: 2px 8px; border: 1px solid #ddd; border-radius: 4px; cursor: pointer; background: #fff; }
+        .printer-card .actions button:hover { background: #f5f5f5; }
+        .printer-card .actions button.del { color: #c62828; border-color: #ffcdd2; }
+        .printer-card .actions button.del:hover { background: #ffebee; }
 
-        /* Jobs table */
+        .btn { padding: 6px 14px; border: none; border-radius: 6px; cursor: pointer; font-size: 13px; font-weight: 600; }
+        .btn-primary { background: #1a1a2e; color: #fff; }
+        .btn-primary:hover { background: #2d2d4e; }
+
+        /* Modal */
+        .modal-overlay { display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.4); z-index: 100; justify-content: center; align-items: center; }
+        .modal-overlay.active { display: flex; }
+        .modal { background: #fff; border-radius: 12px; padding: 24px; width: 400px; max-width: 90vw; box-shadow: 0 8px 32px rgba(0,0,0,0.2); }
+        .modal h3 { margin-bottom: 16px; }
+        .modal label { display: block; font-size: 13px; font-weight: 600; color: #555; margin-bottom: 4px; margin-top: 12px; }
+        .modal input { width: 100%; padding: 8px 12px; border: 1px solid #ddd; border-radius: 6px; font-size: 14px; }
+        .modal .modal-actions { margin-top: 20px; display: flex; justify-content: flex-end; gap: 8px; }
+        .modal .btn-cancel { background: #f5f5f5; color: #333; padding: 6px 14px; border: 1px solid #ddd; border-radius: 6px; cursor: pointer; }
+
         .table-wrap { background: #fff; border-radius: 10px; box-shadow: 0 1px 3px rgba(0,0,0,0.1); overflow: hidden; }
         table { width: 100%; border-collapse: collapse; font-size: 14px; }
         thead { background: #f5f5f5; }
@@ -69,7 +87,7 @@
 
     <div class="container">
         <!-- Stats -->
-        <div class="stats" id="stats-section">
+        <div class="stats">
             <div class="stat-card">
                 <div class="label">Presupuestos</div>
                 <div class="value blue" id="stat-orders">{{ stats.orders_printed }}</div>
@@ -89,20 +107,11 @@
         </div>
 
         <!-- Printers -->
-        <div class="section-title">Impresoras</div>
-        <div class="printers" id="printers-section">
-            {% for p in printers %}
-            <div class="printer-card {{ 'online' if p.online else 'offline' }}">
-                <div class="info">
-                    <div class="name">{{ p.name }}</div>
-                    <div class="ip">{{ p.ip }}:9100</div>
-                </div>
-                <span class="badge {{ 'on' if p.online else 'off' }}">
-                    {{ 'EN LINEA' if p.online else 'OFFLINE' }}
-                </span>
-            </div>
-            {% endfor %}
+        <div class="section-title">
+            Impresoras
+            <button class="btn btn-primary" onclick="openAddModal()">+ Agregar</button>
         </div>
+        <div class="printers" id="printers-section"></div>
 
         <!-- Recent jobs -->
         <div class="section-title">Ultimas impresiones</div>
@@ -118,28 +127,7 @@
                     </tr>
                 </thead>
                 <tbody id="jobs-tbody">
-                    {% if recent %}
-                        {% for job in recent %}
-                        <tr>
-                            <td>{{ job.timestamp }}</td>
-                            <td><span class="badge-type {{ job.doc_type }}">{{ job.doc_type }}</span></td>
-                            <td>{{ job.doc_name }}</td>
-                            <td>{{ job.printer }}</td>
-                            <td>
-                                {% if job.status == 'ok' %}
-                                    <span class="status-ok">OK</span>
-                                {% else %}
-                                    <span class="status-error">ERROR</span>
-                                    {% if job.error_msg %}
-                                        <div class="error-msg">{{ job.error_msg }}</div>
-                                    {% endif %}
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    {% else %}
-                        <tr><td colspan="5" class="empty-msg">Sin impresiones registradas</td></tr>
-                    {% endif %}
+                    <tr><td colspan="5" class="empty-msg">Cargando...</td></tr>
                 </tbody>
             </table>
         </div>
@@ -147,7 +135,26 @@
         <div class="refresh-info">Auto-refresh cada 5 segundos</div>
     </div>
 
+    <!-- Modal agregar/editar impresora -->
+    <div class="modal-overlay" id="printer-modal">
+        <div class="modal">
+            <h3 id="modal-title">Agregar impresora</h3>
+            <input type="hidden" id="modal-id">
+            <label>Nombre</label>
+            <input type="text" id="modal-name" placeholder="POS-80-207">
+            <label>IP</label>
+            <input type="text" id="modal-ip" placeholder="10.69.1.207">
+            <label>Puerto</label>
+            <input type="number" id="modal-port" value="9100">
+            <div class="modal-actions">
+                <button class="btn-cancel" onclick="closeModal()">Cancelar</button>
+                <button class="btn btn-primary" onclick="savePrinter()">Guardar</button>
+            </div>
+        </div>
+    </div>
+
     <script>
+        // Clock
         function updateClock() {
             document.getElementById('clock').textContent =
                 new Date().toLocaleTimeString('es-CL', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -155,6 +162,90 @@
         setInterval(updateClock, 1000);
         updateClock();
 
+        // Modal
+        function openAddModal() {
+            document.getElementById('modal-title').textContent = 'Agregar impresora';
+            document.getElementById('modal-id').value = '';
+            document.getElementById('modal-name').value = '';
+            document.getElementById('modal-ip').value = '';
+            document.getElementById('modal-port').value = '9100';
+            document.getElementById('printer-modal').classList.add('active');
+        }
+
+        function openEditModal(p) {
+            document.getElementById('modal-title').textContent = 'Editar impresora';
+            document.getElementById('modal-id').value = p.id;
+            document.getElementById('modal-name').value = p.name;
+            document.getElementById('modal-ip').value = p.ip;
+            document.getElementById('modal-port').value = p.port;
+            document.getElementById('printer-modal').classList.add('active');
+        }
+
+        function closeModal() {
+            document.getElementById('printer-modal').classList.remove('active');
+        }
+
+        async function savePrinter() {
+            const id = document.getElementById('modal-id').value;
+            const data = {
+                name: document.getElementById('modal-name').value,
+                ip: document.getElementById('modal-ip').value,
+                port: parseInt(document.getElementById('modal-port').value) || 9100,
+            };
+            if (!data.name || !data.ip) { alert('Nombre e IP son obligatorios'); return; }
+
+            if (id) {
+                await fetch('/api/printers/' + id, { method: 'PUT', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+            } else {
+                await fetch('/api/printers', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify(data) });
+            }
+            closeModal();
+            refresh();
+        }
+
+        async function togglePrinter(id, currentEnabled) {
+            await fetch('/api/printers/' + id, {
+                method: 'PUT',
+                headers: {'Content-Type': 'application/json'},
+                body: JSON.stringify({ enabled: !currentEnabled })
+            });
+            refresh();
+        }
+
+        async function deletePrinter(id, name) {
+            if (!confirm('Eliminar impresora ' + name + '?')) return;
+            await fetch('/api/printers/' + id, { method: 'DELETE' });
+            refresh();
+        }
+
+        // Render printers
+        function renderPrinters(printers) {
+            const pc = document.getElementById('printers-section');
+            if (printers.length === 0) {
+                pc.innerHTML = '<div style="color:#999;padding:20px;">No hay impresoras configuradas. Usa el boton "+ Agregar".</div>';
+                return;
+            }
+            pc.innerHTML = printers.map(p => {
+                const cls = !p.enabled ? 'disabled' : (p.online ? 'online' : 'offline');
+                const badge = !p.enabled ? '<span class="badge dis">DESHABILITADA</span>'
+                    : (p.online ? '<span class="badge on">EN LINEA</span>' : '<span class="badge off">OFFLINE</span>');
+                return `
+                <div class="printer-card ${cls}">
+                    <div class="info">
+                        <div class="name">${p.name}</div>
+                        <div class="ip">${p.ip}:${p.port}</div>
+                        <div class="actions">
+                            <button onclick='openEditModal(${JSON.stringify(p)})'>Editar</button>
+                            <button onclick="togglePrinter(${p.id}, ${p.enabled})">${p.enabled ? 'Deshabilitar' : 'Habilitar'}</button>
+                            <button class="del" onclick="deletePrinter(${p.id}, '${p.name}')">Eliminar</button>
+                        </div>
+                    </div>
+                    ${badge}
+                </div>`;
+            }).join('');
+        }
+
+        // Auto-refresh
         async function refresh() {
             try {
                 const res = await fetch('/api/status');
@@ -178,18 +269,7 @@
                 document.getElementById('stat-errors').textContent = data.stats.errors;
 
                 // Printers
-                const pc = document.getElementById('printers-section');
-                pc.innerHTML = data.printers.map(p => `
-                    <div class="printer-card ${p.online ? 'online' : 'offline'}">
-                        <div class="info">
-                            <div class="name">${p.name}</div>
-                            <div class="ip">${p.ip}:9100</div>
-                        </div>
-                        <span class="badge ${p.online ? 'on' : 'off'}">
-                            ${p.online ? 'EN LINEA' : 'OFFLINE'}
-                        </span>
-                    </div>
-                `).join('');
+                renderPrinters(data.printers);
 
                 // Jobs
                 const tbody = document.getElementById('jobs-tbody');

@@ -26,9 +26,9 @@ PRINTER_NAMES = [
     p.strip() for p in os.getenv("PRINTER_NAMES", "").split(",") if p.strip()
 ]
 
-# IPs de impresoras (formato: nombre=ip,nombre2=ip2 o nombre=ip;nombre2=ip2)
+# IPs de impresoras (legacy, para migración inicial a SQLite)
+# Formato: nombre=ip,nombre2=ip2 o nombre=ip;nombre2=ip2
 _raw_ips = os.getenv("PRINTER_IPS", "")
-# Soportar , o ; como separador
 _separator = ";" if ";" in _raw_ips else ","
 PRINTER_IPS = {}
 for entry in _raw_ips.split(_separator):
@@ -36,10 +36,6 @@ for entry in _raw_ips.split(_separator):
     if "=" in entry:
         name, ip = entry.split("=", 1)
         PRINTER_IPS[name.strip()] = ip.strip()
-
-# Log de diagnóstico (se imprime al importar config)
-print(f"[config] PRINTER_NAMES={PRINTER_NAMES}")
-print(f"[config] PRINTER_IPS raw='{_raw_ips}' parsed={PRINTER_IPS}")
 
 # Reporte de presupuesto 80mm para sale.order
 REPORT_PRESUPUESTO = os.getenv(

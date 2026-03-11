@@ -28,68 +28,46 @@ BAND_HEIGHT = 256
 
 
 class PrinterManager:
-    """Gestiona impresión a múltiples impresoras de red."""
+    """Gestiona impresión a múltiples impresoras de red.
+    Carga impresoras desde PrintStore (SQLite) en cada impresión."""
 
-    def __init__(self, printer_names: list[str], printer_ips: dict[str, str] = None):
-        self.printers = []
-        self.printer_ips = printer_ips or {}
+    def __init__(self, store):
+        self.store = store
+        printers = store.get_printers(only_enabled=True)
+        for p in printers:
+            try:
+                s = socket.create_connection((p["ip"], p["port"]), timeout=5)
+                s.close()
+                logger.info(f"Impresora verificada (red): {p['name']} ({p['ip']}:{p['port']})")
+            except Exception as e:
+                logger.warning(f"Impresora {p['name']} ({p['ip']}:{p['port']}) no accesible al inicio: {e}")
 
-        if IS_WINDOWS:
-            self._init_windows(printer_names)
-        else:
-            self._init_linux(printer_names)
-
-        if not self.printers:
-            logger.warning("No se encontraron impresoras configuradas")
-
-    def _init_windows(self, printer_names):
-        installed = [
-            p[2] for p in win32print.EnumPrinters(
-                win32print.PRINTER_ENUM_LOCAL | win32print.PRINTER_ENUM_CONNECTIONS
-            )
-        ]
-        for name in printer_names:
-            name = name.strip()
-            if name in installed:
-                self.printers.append(name)
-                logger.info(f"Impresora verificada (Windows): {name}")
-            else:
-                logger.warning(f"Impresora '{name}' no encontrada en Windows")
-
-    def _init_linux(self, printer_names):
-        for name in printer_names:
-            name = name.strip()
-            if not name:
-                continue
-            ip = self.printer_ips.get(name)
-            if ip:
-                self.printers.append(name)
-                try:
-                    s = socket.create_connection((ip, 9100), timeout=5)
-                    s.close()
-                    logger.info(f"Impresora verificada (red): {name} ({ip}:9100)")
-                except Exception as e:
-                    logger.warning(f"Impresora {name} ({ip}:9100) no accesible al inicio: {e}")
-            else:
-                logger.warning(f"Impresora {name} sin IP configurada en PRINTER_IPS")
+        if not printers:
+            logger.warning("No hay impresoras configuradas en la base de datos")
 
     def print_pdf(self, pdf_bytes: bytes, doc_name: str = "OdooPrint") -> list:
-        """Envía el PDF a todas las impresoras. Retorna lista de resultados."""
+        """Envía el PDF a todas las impresoras habilitadas. Retorna resultados."""
+        # Carga impresoras desde DB cada vez (permite agregar sin reiniciar)
+        printers = self.store.get_printers(only_enabled=True)
+        if not printers:
+            logger.warning("No hay impresoras habilitadas para imprimir")
+            return []
+
         path = self._save_temp(pdf_bytes)
         results = []
         try:
-            for printer_name in self.printers:
+            for p in printers:
                 try:
                     if IS_WINDOWS:
-                        self._print_windows(path, printer_name)
+                        self._print_windows(path, p["name"])
                     else:
-                        self._print_escpos(path, printer_name)
-                    logger.info(f"Enviado a {printer_name}: {doc_name}")
-                    results.append({"printer": printer_name, "status": "ok"})
+                        self._print_escpos(path, p["name"], p["ip"], p["port"])
+                    logger.info(f"Enviado a {p['name']}: {doc_name}")
+                    results.append({"printer": p["name"], "status": "ok"})
                 except Exception as e:
-                    logger.error(f"Error imprimiendo en {printer_name}: {e}")
+                    logger.error(f"Error imprimiendo en {p['name']}: {e}")
                     results.append({
-                        "printer": printer_name,
+                        "printer": p["name"],
                         "status": "error",
                         "error": str(e),
                     })
@@ -128,9 +106,8 @@ class PrinterManager:
 
     # ─── Linux: PDF → imagen → ESC/POS por socket TCP 9100 ───────────────────
 
-    def _print_escpos(self, pdf_path: str, printer_name: str):
+    def _print_escpos(self, pdf_path: str, printer_name: str, ip: str = None, port: int = 9100):
         """Convierte PDF a imagen y envía por ESC/POS al puerto 9100."""
-        ip = self.printer_ips.get(printer_name)
         if not ip:
             raise RuntimeError(f"No hay IP para impresora {printer_name}")
 
@@ -156,7 +133,7 @@ class PrinterManager:
             # 2. Procesar y enviar por socket
             from PIL import Image
 
-            with socket.create_connection((ip, 9100), timeout=60) as sock:
+            with socket.create_connection((ip, port), timeout=60) as sock:
                 sock.sendall(ESCPOS_INIT)
 
                 for page_path in pages:
