@@ -133,7 +133,7 @@ class PrinterManager:
                 raise RuntimeError("pdftoppm no generó imágenes")
 
             # 2. Procesar y enviar por socket
-            from PIL import Image, ImageFilter
+            from PIL import Image, ImageEnhance
 
             with socket.create_connection((ip, port), timeout=60) as sock:
                 sock.sendall(ESCPOS_INIT)
@@ -154,11 +154,11 @@ class PrinterManager:
                     img = self._trim_bottom(img)
                     logger.info(f"Imagen recortada: {img.width}x{img.height}px")
 
-                    # Enfocar para mejorar nitidez de códigos de barras
-                    img = img.filter(ImageFilter.SHARPEN)
+                    # Aumentar contraste para barras nítidas en barcodes
+                    img = ImageEnhance.Contrast(img).enhance(2.0)
 
-                    # Convertir a 1-bit blanco y negro
-                    img = img.point(lambda x: 0 if x < 128 else 255, "1")
+                    # Convertir a 1-bit con threshold alto (barras más gruesas)
+                    img = img.point(lambda x: 0 if x < 160 else 255, "1")
 
                     # Enviar en bandas para no desbordar buffer
                     self._send_image_bands(sock, img)
