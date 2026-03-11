@@ -138,21 +138,9 @@ def main():
                 logger.info(f"Nuevo pedido confirmado: {oname} (id={oid})")
                 update_state(last_order=oname)
 
-                # 1. Imprimir PRESUPUESTO 80MM
+                # Descargar PDF del presupuesto
                 try:
-                    pdf = client.download_pdf(oid, config.REPORT_PRESUPUESTO)
-                    results = printer.print_pdf(pdf, doc_name=f"Presupuesto {oname}")
-                    any_ok = False
-                    for r in results:
-                        store.record_print(
-                            "presupuesto", oname, oid, r["printer"],
-                            r["status"], r.get("error"),
-                        )
-                        if r["status"] == "ok":
-                            any_ok = True
-                    if not any_ok:
-                        logger.error(f"Fallo impresion presupuesto {oname} en todas las impresoras")
-                        continue
+                    presupuesto_pdf = client.download_pdf(oid, config.REPORT_PRESUPUESTO)
                 except Exception as e:
                     logger.error(f"Error PDF presupuesto {oname}: {e}")
                     store.record_print(
@@ -160,27 +148,81 @@ def main():
                     )
                     continue
 
-                # Pausa para que la impresora procese el presupuesto
-                time.sleep(5)
-
-                # 2. Imprimir albaranes asociados
+                # Obtener albaranes y agrupar por zona
                 picking_ids = order.get("picking_ids", [])
+                pickings = []
                 if picking_ids:
                     pickings = client.get_pickings_by_ids(picking_ids)
-                    for pick in pickings:
+
+                # Agrupar albaranes por zona para ruteo a impresoras
+                zone_pickings = {}  # zona -> [pick, ...]
+                for pick in pickings:
+                    if pick["id"] in printed_pickings:
+                        continue
+                    zone = extract_zone(pick["name"])
+                    if zone:
+                        zone_pickings.setdefault(zone, []).append(pick)
+                    else:
+                        logger.warning(
+                            f"Albaran {pick['name']} sin zona detectada, "
+                            f"no se imprimirá"
+                        )
+
+                if not zone_pickings:
+                    logger.warning(
+                        f"Pedido {oname} sin albaranes con zona asignada, "
+                        f"no se imprime"
+                    )
+                    printed_orders.add(oid)
+                    continue
+
+                # Para cada zona: imprimir presupuesto + albaranes
+                # en la impresora asignada a esa zona
+                any_order_ok = False
+                for zone, picks in zone_pickings.items():
+                    zone_printers = store.get_printers_for_zone(zone)
+                    if not zone_printers:
+                        logger.warning(
+                            f"Zona {zone}: sin impresora asignada, "
+                            f"saltando {len(picks)} albaran(es)"
+                        )
+                        continue
+
+                    logger.info(
+                        f"Zona {zone}: imprimiendo en "
+                        f"{[p['name'] for p in zone_printers]}"
+                    )
+
+                    # Imprimir presupuesto en esta zona
+                    results = printer.print_pdf(
+                        presupuesto_pdf,
+                        doc_name=f"Presupuesto {oname}",
+                        zone=zone,
+                    )
+                    for r in results:
+                        store.record_print(
+                            "presupuesto", oname, oid, r["printer"],
+                            r["status"], r.get("error"),
+                        )
+                        if r["status"] == "ok":
+                            any_order_ok = True
+
+                    time.sleep(3)
+
+                    # Imprimir albaranes de esta zona
+                    for pick in picks:
                         pid = pick["id"]
                         pname = pick["name"]
-
-                        if pid in printed_pickings:
-                            continue
+                        logger.info(f"Albaran {pname} → zona {zone}")
 
                         try:
-                            zone = extract_zone(pname)
-                            if zone:
-                                logger.info(f"Albaran {pname} → zona {zone}")
-                            pdf = client.download_pdf(pid, config.REPORT_ALBARAN)
+                            albaran_pdf = client.download_pdf(
+                                pid, config.REPORT_ALBARAN,
+                            )
                             results = printer.print_pdf(
-                                pdf, doc_name=f"Albaran {pname}", zone=zone,
+                                albaran_pdf,
+                                doc_name=f"Albaran {pname}",
+                                zone=zone,
                             )
                             any_ok = False
                             for r in results:
@@ -204,7 +246,10 @@ def main():
 
                 # Marcar orden como impresa
                 printed_orders.add(oid)
-                logger.info(f"OK {oname} procesado completamente")
+                if any_order_ok:
+                    logger.info(f"OK {oname} procesado completamente")
+                else:
+                    logger.warning(f"{oname} procesado pero sin impresiones exitosas")
 
             # Actualizar timestamp
             last_check = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%S")
