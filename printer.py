@@ -1,5 +1,6 @@
 import os
 import platform
+import re
 import socket
 import struct
 import subprocess
@@ -26,6 +27,45 @@ THERMAL_WIDTH_PX = 576
 # Altura máxima por banda (evita desbordar buffer de impresora)
 BAND_HEIGHT = 256
 
+# Regex para detectar zona en texto de página PDF
+_PAGE_ZONE_RE = re.compile(r"ZONA\s+(\d+)", re.IGNORECASE)
+
+
+def detect_page_zones(pdf_path: str) -> dict:
+    """Detecta la zona de cada página del PDF usando pdftotext.
+
+    Returns: dict {page_index: zone_str_or_None}
+        page_index es 0-based. zone_str es 'Z1', 'Z2', etc.
+        None indica que es una página de presupuesto (sin zona).
+    """
+    # Contar páginas
+    result = subprocess.run(
+        ["pdfinfo", pdf_path],
+        capture_output=True, text=True, timeout=10,
+    )
+    num_pages = 1
+    for line in result.stdout.splitlines():
+        if line.lower().startswith("pages:"):
+            num_pages = int(line.split(":")[1].strip())
+            break
+
+    zones = {}
+    for i in range(num_pages):
+        # pdftotext usa numeración 1-based
+        result = subprocess.run(
+            ["pdftotext", "-f", str(i + 1), "-l", str(i + 1), pdf_path, "-"],
+            capture_output=True, text=True, timeout=10,
+        )
+        text = result.stdout
+        m = _PAGE_ZONE_RE.search(text)
+        if m:
+            zones[i] = f"Z{m.group(1)}"
+        else:
+            zones[i] = None  # Presupuesto
+
+    logger.info(f"Zonas detectadas en PDF ({num_pages} páginas): {zones}")
+    return zones
+
 
 class PrinterManager:
     """Gestiona impresión a múltiples impresoras de red.
@@ -46,8 +86,13 @@ class PrinterManager:
             logger.warning("No hay impresoras configuradas en la base de datos")
 
     def print_pdf(self, pdf_bytes: bytes, doc_name: str = "OdooPrint",
-                  zone: str = None) -> list:
-        """Envía el PDF a la impresora asignada a la zona indicada."""
+                  zone: str = None, pages: list = None) -> list:
+        """Envía el PDF a la impresora asignada a la zona indicada.
+
+        Args:
+            pages: lista de índices de página 0-based a imprimir.
+                   Si None, imprime todas las páginas.
+        """
         if not zone:
             logger.warning(f"Sin zona para {doc_name}, no se imprime")
             return []
@@ -55,7 +100,10 @@ class PrinterManager:
         if not printers:
             logger.warning(f"No hay impresoras asignadas a zona {zone}")
             return []
-        logger.info(f"Zona {zone}: imprimiendo en {[p['name'] for p in printers]}")
+        logger.info(
+            f"Zona {zone}: imprimiendo en {[p['name'] for p in printers]}"
+            f" (páginas: {pages if pages else 'todas'})"
+        )
 
         path = self._save_temp(pdf_bytes)
         results = []
@@ -65,7 +113,7 @@ class PrinterManager:
                     if IS_WINDOWS:
                         self._print_windows(path, p["name"])
                     else:
-                        self._print_escpos(path, p["name"], p["ip"], p["port"])
+                        self._print_escpos(path, p["name"], p["ip"], p["port"], pages=pages)
                     logger.info(f"Enviado a {p['name']}: {doc_name}")
                     results.append({"printer": p["name"], "status": "ok"})
                 except Exception as e:
@@ -110,16 +158,19 @@ class PrinterManager:
 
     # ─── Linux: PDF → imagen → ESC/POS por socket TCP 9100 ───────────────────
 
-    def _print_escpos(self, pdf_path: str, printer_name: str, ip: str = None, port: int = 9100):
-        """Convierte PDF a imagen y envía por ESC/POS al puerto 9100."""
+    def _print_escpos(self, pdf_path: str, printer_name: str,
+                      ip: str = None, port: int = 9100, pages: list = None):
+        """Convierte PDF a imagen y envía por ESC/POS al puerto 9100.
+
+        Args:
+            pages: lista de índices 0-based de páginas a imprimir.
+                   Si None, imprime todas.
+        """
         if not ip:
             raise RuntimeError(f"No hay IP para impresora {printer_name}")
 
         tmpdir = tempfile.mkdtemp(prefix="odoo_img_")
         try:
-            # 1. Convertir PDF a PNG a 576px de ancho directo desde vector
-            #    pdftoppm renderiza desde el PDF vectorial al tamaño exacto,
-            #    sin necesidad de escalar con PIL (mejor para barcodes)
             subprocess.run([
                 "pdftoppm", "-png", "-r", "300",
                 "-cropbox",
@@ -129,35 +180,39 @@ class PrinterManager:
                 os.path.join(tmpdir, "page"),
             ], capture_output=True, timeout=30, check=True)
 
-            pages = sorted([
+            all_pages = sorted([
                 os.path.join(tmpdir, f) for f in os.listdir(tmpdir)
                 if f.endswith(".png")
             ])
-            if not pages:
+            if not all_pages:
                 raise RuntimeError("pdftoppm no generó imágenes")
 
-            # 2. Procesar y enviar por socket
+            # Filtrar páginas si se especificaron
+            if pages is not None:
+                selected = [all_pages[i] for i in pages if i < len(all_pages)]
+            else:
+                selected = all_pages
+
+            if not selected:
+                logger.warning(f"No hay páginas para imprimir en {printer_name}")
+                return
+
             from PIL import Image
 
             with socket.create_connection((ip, port), timeout=60) as sock:
                 sock.sendall(ESCPOS_INIT)
 
-                for page_path in pages:
+                for page_path in selected:
                     img = Image.open(page_path).convert("L")
                     logger.info(f"Imagen original: {img.width}x{img.height}px")
 
-                    # Recortar espacio en blanco inferior
                     img = self._trim_bottom(img)
                     logger.info(f"Imagen recortada: {img.width}x{img.height}px")
 
-                    # Convertir a 1-bit. Threshold bajo (96) compensa el
-                    # sangrado térmico que engrosa las barras de barcodes.
+                    # Threshold bajo (96) compensa sangrado térmico en barcodes
                     img = img.point(lambda x: 0 if x < 96 else 255, "1")
 
-                    # Enviar en bandas para no desbordar buffer
                     self._send_image_bands(sock, img)
-
-                    # Cortar papel después de cada página
                     sock.sendall(ESCPOS_FEED + ESCPOS_CUT)
 
         finally:
@@ -175,16 +230,14 @@ class PrinterManager:
             band = img.crop((0, y, img.width, y + band_h))
             pixels = band.tobytes()
 
-            # Invertir bits: ESC/POS 1=negro, PIL mode "1" 0=negro
             inverted = bytes(~b & 0xFF for b in pixels)
 
-            # GS v 0 m xL xH yL yH data
             header = GS + b'v0\x00'
             header += struct.pack('<H', width_bytes)
             header += struct.pack('<H', band_h)
 
             sock.sendall(header + inverted)
-            time.sleep(0.05)  # Pausa entre bandas para la impresora
+            time.sleep(0.05)
 
     def _trim_bottom(self, img):
         """Recorta espacio en blanco inferior. Detecta gap entre contenido y footer."""
@@ -195,7 +248,6 @@ class PrinterManager:
         threshold = 200
         min_dark_pixels = max(1, int(width * 0.01))
 
-        # Clasificar cada fila como contenido (True) o blanca (False)
         has_content = []
         for y in range(height):
             row_start = y * width
@@ -203,8 +255,6 @@ class PrinterManager:
             dark_count = sum(1 for b in row if b < threshold)
             has_content.append(dark_count >= min_dark_pixels)
 
-        # Buscar desde arriba el último bloque de contenido antes de un gap grande
-        # Un gap de >300 filas blancas indica separación contenido/footer
         GAP_THRESHOLD = 300
         gap_start = None
         consecutive_white = 0
@@ -217,7 +267,6 @@ class PrinterManager:
                 consecutive_white += 1
             else:
                 if consecutive_white >= GAP_THRESHOLD:
-                    # Hay un gap grande antes de este contenido → esto es footer
                     main_content_end = gap_start
                     logger.info(
                         f"Trim: gap de {consecutive_white} filas blancas "
@@ -226,7 +275,6 @@ class PrinterManager:
                     break
                 consecutive_white = 0
 
-        # Si no se encontró gap, buscar la última fila con contenido
         if main_content_end == height:
             for y in range(height - 1, -1, -1):
                 if has_content[y]:
