@@ -43,7 +43,7 @@ LEGACY_FILE_ALT = os.path.join(DATA_DIR, "printed_ids.json")
 # ─── Utilidades ──────────────────────────────────────────────────────────────
 
 # Extrae zona del nombre del albarán: "01/OUT/377998 - Z1 - 01 de 02" → "Z1"
-_ZONE_RE = re.compile(r"- (Z\d+) -", re.IGNORECASE)
+_ZONE_RE = re.compile(r"[/\- ](Z\d+)(?:[/\- ]|$)", re.IGNORECASE)
 
 
 def extract_zone(picking_name: str) -> str | None:
